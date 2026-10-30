@@ -36,15 +36,88 @@ interface ShellProps {
       role: string;
     };
     metrics: {
-      totalIncome: number;
+      totalRevenue: number;
       totalExpenses: number;
       netProfit: number;
+      cashInflow: number;
+      cashOutflow: number;
+      netCashFlow: number;
       outstandingReceivables: number;
+      outstandingPayables: number;
       invoicesCount: number;
-      expensesCount: number;
+      purchaseBillsCount: number;
+      ordersCount: number;
       customersCount: number;
       vendorsCount: number;
+      productsCount: number;
       isDemoDataNotice: string;
+    };
+    lists: {
+      customers: Array<{
+        id: string;
+        name: string;
+        email: string | null;
+        phone: string | null;
+        gstin: string | null;
+        stateCode: string | null;
+        balance: number;
+        paymentTerms: string | null;
+      }>;
+      vendors: Array<{
+        id: string;
+        name: string;
+        email: string | null;
+        phone: string | null;
+        gstin: string | null;
+        stateCode: string | null;
+        balance: number;
+        paymentTerms: string | null;
+      }>;
+      products: Array<{
+        id: string;
+        name: string;
+        sku: string | null;
+        type: string;
+        unit: string;
+        sellingPrice: number;
+        purchasePrice: number;
+        hsnSacCode: string;
+        gstRate: number;
+        isActive: boolean;
+      }>;
+      orders: Array<{
+        id: string;
+        orderNumber: string;
+        type: string;
+        status: string;
+        partnerName?: string | null;
+        orderDate: string;
+        grandTotal: number;
+        itemsCount: number;
+      }>;
+      invoices: Array<{
+        id: string;
+        invoiceNumber: string;
+        type: string;
+        status: string;
+        partnerName?: string | null;
+        invoiceDate: string;
+        dueDate: string;
+        grandTotal: number;
+        amountPaid: number;
+        balanceDue: number;
+      }>;
+      payments: Array<{
+        id: string;
+        paymentNumber: string;
+        type: string;
+        amount: number;
+        paymentDate: string;
+        paymentMode: string;
+        referenceNumber: string | null;
+        partnerName?: string | null;
+        invoiceNumber: string | null;
+      }>;
     };
     recentActivity: Array<{
       id: string;

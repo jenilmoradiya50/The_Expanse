@@ -30,7 +30,12 @@ export const AuditEntity = {
   GST_PROFILE: "GST_PROFILE",
   CUSTOMER: "CUSTOMER",
   VENDOR: "VENDOR",
+  PRODUCT: "PRODUCT",
+  ORDER: "ORDER",
+  ORDER_ITEM: "ORDER_ITEM",
   INVOICE: "INVOICE",
+  INVOICE_ITEM: "INVOICE_ITEM",
+  PAYMENT: "PAYMENT",
   BUSINESS_EXPENSE: "BUSINESS_EXPENSE",
   PERSONAL_ACCOUNT: "PERSONAL_ACCOUNT",
   PERSONAL_TRANSACTION: "PERSONAL_TRANSACTION",
@@ -50,6 +55,55 @@ export const InvoiceStatus = {
 } as const;
 
 export type InvoiceStatusType = (typeof InvoiceStatus)[keyof typeof InvoiceStatus];
+
+export const InvoiceType = {
+  SALES: "SALES",
+  PURCHASE: "PURCHASE",
+} as const;
+
+export type InvoiceTypeVal = (typeof InvoiceType)[keyof typeof InvoiceType];
+
+export const OrderStatus = {
+  DRAFT: "DRAFT",
+  SUBMITTED: "SUBMITTED",
+  APPROVED: "APPROVED",
+  PARTIALLY_FULFILLED: "PARTIALLY_FULFILLED",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+} as const;
+
+export type OrderStatusType = (typeof OrderStatus)[keyof typeof OrderStatus];
+
+export const OrderType = {
+  SALES: "SALES",
+  PURCHASE: "PURCHASE",
+} as const;
+
+export type OrderTypeVal = (typeof OrderType)[keyof typeof OrderType];
+
+export const ProductType = {
+  PRODUCT: "PRODUCT",
+  SERVICE: "SERVICE",
+} as const;
+
+export type ProductTypeVal = (typeof ProductType)[keyof typeof ProductType];
+
+export const PaymentType = {
+  INCOMING: "INCOMING",
+  OUTGOING: "OUTGOING",
+} as const;
+
+export type PaymentTypeVal = (typeof PaymentType)[keyof typeof PaymentType];
+
+export const PaymentMode = {
+  BANK_TRANSFER: "BANK_TRANSFER",
+  UPI: "UPI",
+  CHEQUE: "CHEQUE",
+  CASH: "CASH",
+  CARD: "CARD",
+} as const;
+
+export type PaymentModeVal = (typeof PaymentMode)[keyof typeof PaymentMode];
 
 export const PersonalAccountType = {
   SAVINGS: "SAVINGS",

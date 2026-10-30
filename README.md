@@ -35,7 +35,16 @@
 
 ---
 
-## 📁 Project Structure
+## 💼 Core Business Modules (Phase 4)
+
+* **Customers & Suppliers (Vendors):** Contact profiles, GSTIN validation, state codes, payment terms, soft-archival (`isArchived`), and duplicate GSTIN prevention within the organization.
+* **Products & Services Catalog:** SKU uniqueness validation, HSN/SAC code tracking, physical units vs services, pricing, and applicable GST rate mapping.
+* **Sales & Purchase Orders:** Multi-line order authoring with real-time Decimal tax calculations (CGST/SGST for intra-state, IGST for inter-state), discount calculations, and sequential numbering (`SO-YYYY-XXXX`, `PO-YYYY-XXXX`).
+* **Invoices & Bills:** Sales invoices and supplier purchase bills with payment terms, due dates, balance tracking, and 1-click Order-to-Invoice conversion.
+* **Payments & Ledger Reconciliation:** Incoming receipts and outgoing supplier disbursements with partial payment support, overpayment guards, duplicate reference (`UTR`) prevention, and automatic customer/vendor balance reconciliation.
+* **Real-time Business Metrics:** Live database-calculated metrics for gross revenue, expenses, net profit, cash inflow/outflow, net cash flow, receivables, and payables.
+
+---
 
 ```
 The_Expanse/
@@ -50,6 +59,7 @@ The_Expanse/
 │   └── seed.ts                 # Demo & synthetic development seeder
 ├── tests/                      # Automated test suite (tsx + node:test)
 │   ├── audit.test.ts           # Append-only immutability tests
+│   ├── business.test.ts        # Phase 4 Core Business Management tests (29 tests total)
 │   ├── gst.test.ts             # Indian GST calculation & format tests
 │   ├── shell.test.ts           # Tenant context & workspace switching tests
 │   └── tenancy.test.ts         # Multi-tenant isolation & RBAC authorization tests
@@ -61,7 +71,7 @@ The_Expanse/
     │   └── globals.css         # Global styles & Tailwind directives
     ├── components/             # Reusable UI & domain components
     │   ├── dashboard/          # Domain-specific dashboard views
-    │   │   ├── BusinessDashboard.tsx      # Commercial income, expense, profit & audit
+    │   │   ├── BusinessDashboard.tsx      # Commercial master records, orders, invoices, payments, metrics
     │   │   ├── PersonalDashboard.tsx      # Isolated user net worth, accounts & cash flow
     │   │   └── FutureModulePlaceholder.tsx# Pluggable modular ecosystem preview
     │   └── layout/             # Shell layout primitives
@@ -71,8 +81,9 @@ The_Expanse/
     │       ├── UserProfileMenu.tsx        # Server-verified user identity dropdown
     │       └── WorkspaceSwitcher.tsx      # Multi-org switcher with server-side validation
     ├── lib/                    # Core Services & Business Logic
-    │   ├── actions.ts          # Server actions (switchOrg, metrics loaders)
+    │   ├── actions.ts          # Server actions (switchOrg, metrics loaders, business entity mutations)
     │   ├── audit.ts            # Append-only audit logging service
+    │   ├── business.ts         # Phase 4 Core Business domain service & ledger reconciliation
     │   ├── gst.ts              # Indian GST engine with Decimal precision
     │   ├── prisma.ts           # Prisma client with immutable audit extension
     │   ├── session.ts          # Server-side user identity & active tenant resolver

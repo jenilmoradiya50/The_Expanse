@@ -63,8 +63,11 @@ model Organization {
   // Business Domain
   customers        Customer[]
   vendors          Vendor[]
+  products         Product[]
+  orders           Order[]
   invoices         Invoice[]
   expenses         BusinessExpense[]
+  payments         Payment[]
 
   // Audit History & Attachments
   auditLogs        AuditLog[]
@@ -167,14 +170,18 @@ model Customer {
   stateCode       String?      // Place of Supply identification
   billingAddress  String?
   shippingAddress String?
+  paymentTerms    String?      @default("NET_30")
   balance         Float        @default(0)
+  isArchived      Boolean      @default(false)
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
   organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orders          Order[]
   invoices        Invoice[]
+  payments        Payment[]
 
-  @@index([organizationId])
+  @@index([organizationId, isArchived])
 }
 
 model Vendor {
@@ -186,23 +193,117 @@ model Vendor {
   gstin             String?
   pan               String?
   address           String?
+  stateCode         String?
+  paymentTerms      String?           @default("NET_30")
   bankName          String?
   bankAccountNumber String?
   bankIfsc          String?
   balance           Float             @default(0)
+  isArchived        Boolean           @default(false)
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
   organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orders            Order[]
+  invoices          Invoice[]
   expenses          BusinessExpense[]
+  payments          Payment[]
 
-  @@index([organizationId])
+  @@index([organizationId, isArchived])
+}
+
+model Product {
+  id             String        @id @default(cuid())
+  organizationId String
+  name           String
+  sku            String?
+  description    String?
+  type           String        @default("PRODUCT") // PRODUCT, SERVICE
+  unit           String        @default("NOS")
+  sellingPrice   Float         @default(0)
+  purchasePrice  Float         @default(0)
+  hsnSacCode     String
+  gstRate        Float         @default(18)
+  isActive       Boolean       @default(true)
+  isArchived     Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orderItems     OrderItem[]
+  invoiceItems   InvoiceItem[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId, isActive, isArchived])
+}
+
+model Order {
+  id                   String        @id @default(cuid())
+  organizationId       String
+  orderNumber          String        // e.g. SO-2026-001 or PO-2026-001
+  type                 String        @default("SALES") // SALES, PURCHASE
+  customerId           String?
+  vendorId             String?
+  orderDate            DateTime
+  expectedDeliveryDate DateTime?
+  status               String        @default("DRAFT") // DRAFT, SUBMITTED, APPROVED, PARTIALLY_FULFILLED, COMPLETED, CANCELLED
+  placeOfSupply        String        // 2-digit Indian State Code
+  isInterState         Boolean       @default(false)
+  subtotal             Float         @default(0)
+  cgstTotal            Float         @default(0)
+  sgstTotal            Float         @default(0)
+  igstTotal            Float         @default(0)
+  taxTotal             Float         @default(0)
+  discountTotal        Float         @default(0)
+  grandTotal           Float         @default(0)
+  notes                String?
+  isArchived           Boolean       @default(false)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  organization         Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer             Customer?     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  vendor               Vendor?       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  items                OrderItem[]
+  invoices             Invoice[]
+
+  @@unique([organizationId, orderNumber])
+  @@index([organizationId, type, status, isArchived])
+}
+
+model OrderItem {
+  id            String   @id @default(cuid())
+  orderId       String
+  productId     String?
+  description   String
+  hsnSacCode    String
+  quantity      Float    @default(1)
+  unit          String   @default("NOS")
+  unitPrice     Float
+  discount      Float    @default(0)
+  taxableAmount Float
+  gstRate       Float
+  cgstRate      Float    @default(0)
+  cgstAmount    Float    @default(0)
+  sgstRate      Float    @default(0)
+  sgstAmount    Float    @default(0)
+  igstRate      Float    @default(0)
+  igstAmount    Float    @default(0)
+  totalAmount   Float
+
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
 }
 
 model Invoice {
   id             String        @id @default(cuid())
   organizationId String
-  customerId     String
+  type           String        @default("SALES") // SALES, PURCHASE
+  customerId     String?
+  vendorId       String?
+  orderId        String?
   invoiceNumber  String        // e.g. EXP-2026-001
   invoiceDate    DateTime
   dueDate        DateTime
@@ -219,22 +320,28 @@ model Invoice {
   amountPaid     Float         @default(0)
   notes          String?
   terms          String?
+  isArchived     Boolean       @default(false)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
   organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer       Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customer       Customer?     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  vendor         Vendor?       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  order          Order?        @relation(fields: [orderId], references: [id], onDelete: SetNull)
   items          InvoiceItem[]
+  payments       Payment[]
   attachments    Attachment[]
 
   @@unique([organizationId, invoiceNumber])
-  @@index([organizationId, status])
+  @@index([organizationId, type, status, isArchived])
   @@index([customerId])
+  @@index([vendorId])
 }
 
 model InvoiceItem {
   id            String   @id @default(cuid())
   invoiceId     String
+  productId     String?
   description   String
   hsnSacCode    String   // HSN/SAC Indian Tax classification code
   quantity      Float    @default(1)
@@ -252,7 +359,35 @@ model InvoiceItem {
   totalAmount   Float
 
   invoice       Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
 
+  @@index([invoiceId])
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  organizationId  String
+  paymentNumber   String        // e.g. REC-2026-001 or PAY-2026-001
+  type            String        // INCOMING (from customer), OUTGOING (to vendor)
+  invoiceId       String?
+  customerId      String?
+  vendorId        String?
+  amount          Float
+  paymentDate     DateTime
+  paymentMode     String        @default("BANK_TRANSFER") // BANK_TRANSFER, UPI, CHEQUE, CASH, CARD
+  referenceNumber String?
+  notes           String?
+  status          String        @default("COMPLETED") // COMPLETED, BOUNCED, VOID
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice         Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  customer        Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  vendor          Vendor?       @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, paymentNumber])
+  @@index([organizationId, type])
   @@index([invoiceId])
 }
 
