@@ -51,20 +51,31 @@ The_Expanse/
 ├── tests/                      # Automated test suite (tsx + node:test)
 │   ├── audit.test.ts           # Append-only immutability tests
 │   ├── gst.test.ts             # Indian GST calculation & format tests
+│   ├── shell.test.ts           # Tenant context & workspace switching tests
 │   └── tenancy.test.ts         # Multi-tenant isolation & RBAC authorization tests
 ├── public/                     # Static assets
 └── src/
     ├── app/                    # Next.js App Router (pages, layouts, routes)
     │   ├── layout.tsx          # Root layout
-    │   ├── page.tsx            # Initial landing view
+    │   ├── page.tsx            # Multi-tenant dashboard shell (Suspense + streaming)
     │   └── globals.css         # Global styles & Tailwind directives
     ├── components/             # Reusable UI & domain components
-    │   ├── ui/                 # Atomic UI primitives
-    │   └── shared/             # Shared layout and navigation components
+    │   ├── dashboard/          # Domain-specific dashboard views
+    │   │   ├── BusinessDashboard.tsx      # Commercial income, expense, profit & audit
+    │   │   ├── PersonalDashboard.tsx      # Isolated user net worth, accounts & cash flow
+    │   │   └── FutureModulePlaceholder.tsx# Pluggable modular ecosystem preview
+    │   └── layout/             # Shell layout primitives
+    │       ├── Shell.tsx                  # App layout orchestrator & drawer state
+    │       ├── Sidebar.tsx                # Left navigation with domain mode switcher
+    │       ├── Topbar.tsx                 # Top navigation with GST & security indicators
+    │       ├── UserProfileMenu.tsx        # Server-verified user identity dropdown
+    │       └── WorkspaceSwitcher.tsx      # Multi-org switcher with server-side validation
     ├── lib/                    # Core Services & Business Logic
+    │   ├── actions.ts          # Server actions (switchOrg, metrics loaders)
     │   ├── audit.ts            # Append-only audit logging service
     │   ├── gst.ts              # Indian GST engine with Decimal precision
     │   ├── prisma.ts           # Prisma client with immutable audit extension
+    │   ├── session.ts          # Server-side user identity & active tenant resolver
     │   ├── tenancy.ts          # Server-side tenant authorization & RBAC
     │   └── utils.ts            # Common helpers
     └── types/                  # Shared TypeScript type definitions

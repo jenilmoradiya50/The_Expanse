@@ -43,9 +43,42 @@ async function main() {
       fiscalYearStart: 4, // April
     },
   });
-  console.log(`🏢 Organization created/verified: ${org.name} (${org.slug})`);
+  console.log(`🏢 Primary Org: ${org.name} (${org.slug})`);
 
-  // 3. Create Owner Membership
+  // 2b. Create Secondary Business Organization (To verify multi-org switching)
+  const org2 = await prisma.organization.upsert({
+    where: { slug: "expanse-logistics" },
+    update: {
+      name: "Expanse Global Logistics [DEMO / DEV ONLY]",
+    },
+    create: {
+      name: "Expanse Global Logistics [DEMO / DEV ONLY]",
+      slug: "expanse-logistics",
+      currency: "INR",
+      timezone: "Asia/Kolkata",
+      fiscalYearStart: 4,
+    },
+  });
+  console.log(`🏢 Secondary Org: ${org2.name} (${org2.slug})`);
+
+  // 2c. Create Restricted Third-Party Organization (User is NOT a member - for security tests)
+  const restrictedOrg = await prisma.organization.upsert({
+    where: { slug: "restricted-corp" },
+    update: {
+      name: "Restricted Enterprise Corp [DEMO / UNRELATED ORG]",
+    },
+    create: {
+      name: "Restricted Enterprise Corp [DEMO / UNRELATED ORG]",
+      slug: "restricted-corp",
+      currency: "INR",
+      timezone: "Asia/Kolkata",
+      fiscalYearStart: 4,
+    },
+  });
+  console.log(`🏢 Restricted Org: ${restrictedOrg.name} (${restrictedOrg.slug})`);
+
+  // 3. Create Memberships
+  // Org 1: OWNER
   await prisma.membership.upsert({
     where: {
       organizationId_userId: {
@@ -64,7 +97,27 @@ async function main() {
       isDefault: true,
     },
   });
-  console.log(`🔑 Membership assigned: OWNER for ${owner.name} in ${org.name}`);
+
+  // Org 2: ADMIN
+  await prisma.membership.upsert({
+    where: {
+      organizationId_userId: {
+        organizationId: org2.id,
+        userId: owner.id,
+      },
+    },
+    update: {
+      role: "ADMIN",
+      isDefault: false,
+    },
+    create: {
+      organizationId: org2.id,
+      userId: owner.id,
+      role: "ADMIN",
+      isDefault: false,
+    },
+  });
+  console.log(`🔑 Memberships assigned: OWNER in ${org.name}, ADMIN in ${org2.name}`);
 
   // 4. Create Indian GST Profile for Organization (Clearly Marked Fictitious)
   await prisma.gstProfile.upsert({
