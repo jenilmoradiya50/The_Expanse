@@ -1194,7 +1194,9 @@ export async function reconcileCustomerBalance(
         where: {
           type: "INCOMING",
           status: "COMPLETED",
-          invoiceId: null,
+        },
+        include: {
+          invoice: true,
         },
       },
     },
@@ -1204,6 +1206,8 @@ export async function reconcileCustomerBalance(
     throw new Error("NOT_FOUND: Customer not found in the active organization.");
   }
 
+  // 1. Calculate outstanding balance from active, non-cancelled, non-archived sales invoices.
+  // Payments already allocated to these invoices are reflected in `inv.amountPaid`.
   let outstandingSum = new Decimal(0);
   let outstandingCount = 0;
   for (const inv of customer.invoices) {
@@ -1214,9 +1218,21 @@ export async function reconcileCustomerBalance(
     }
   }
 
+  // 2. Identify unallocated payments and credits:
+  // - Direct unallocated advances (invoiceId === null)
+  // - Payments made towards invoices that were subsequently CANCELLED or ARCHIVED
+  // (Prevents double deduction: payments on active invoices are already deducted via `amountPaid` above).
   let unallocatedSum = new Decimal(0);
+  let unallocatedCount = 0;
   for (const p of customer.payments) {
-    unallocatedSum = unallocatedSum.plus(p.amount);
+    const isUnallocated = !p.invoiceId;
+    const isLinkedToCancelledOrArchived =
+      p.invoice && (p.invoice.status === "CANCELLED" || p.invoice.isArchived);
+
+    if (isUnallocated || isLinkedToCancelledOrArchived) {
+      unallocatedSum = unallocatedSum.plus(p.amount);
+      unallocatedCount++;
+    }
   }
 
   const expectedBalance = outstandingSum.minus(unallocatedSum).toDecimalPlaces(2).toNumber();
@@ -1264,7 +1280,7 @@ export async function reconcileCustomerBalance(
     details: {
       outstandingInvoicesCount: outstandingCount,
       outstandingInvoicesSum: outstandingSum.toNumber(),
-      unallocatedPaymentsCount: customer.payments.length,
+      unallocatedPaymentsCount: unallocatedCount,
       unallocatedPaymentsSum: unallocatedSum.toNumber(),
     },
   };
@@ -1296,7 +1312,9 @@ export async function reconcileVendorBalance(
         where: {
           type: "OUTGOING",
           status: "COMPLETED",
-          invoiceId: null,
+        },
+        include: {
+          invoice: true,
         },
       },
     },
@@ -1306,6 +1324,8 @@ export async function reconcileVendorBalance(
     throw new Error("NOT_FOUND: Vendor not found in the active organization.");
   }
 
+  // 1. Calculate outstanding balance from active, non-cancelled, non-archived purchase bills.
+  // Payments already allocated to these bills are reflected in `bill.amountPaid`.
   let outstandingSum = new Decimal(0);
   let outstandingCount = 0;
   for (const bill of vendor.invoices) {
@@ -1316,9 +1336,21 @@ export async function reconcileVendorBalance(
     }
   }
 
+  // 2. Identify unallocated payments and credits:
+  // - Direct unallocated advances (invoiceId === null)
+  // - Payments made towards bills that were subsequently CANCELLED or ARCHIVED
+  // (Prevents double deduction: payments on active bills are already deducted via `amountPaid` above).
   let unallocatedSum = new Decimal(0);
+  let unallocatedCount = 0;
   for (const p of vendor.payments) {
-    unallocatedSum = unallocatedSum.plus(p.amount);
+    const isUnallocated = !p.invoiceId;
+    const isLinkedToCancelledOrArchived =
+      p.invoice && (p.invoice.status === "CANCELLED" || p.invoice.isArchived);
+
+    if (isUnallocated || isLinkedToCancelledOrArchived) {
+      unallocatedSum = unallocatedSum.plus(p.amount);
+      unallocatedCount++;
+    }
   }
 
   const expectedBalance = outstandingSum.minus(unallocatedSum).toDecimalPlaces(2).toNumber();
@@ -1366,7 +1398,7 @@ export async function reconcileVendorBalance(
     details: {
       outstandingInvoicesCount: outstandingCount,
       outstandingInvoicesSum: outstandingSum.toNumber(),
-      unallocatedPaymentsCount: vendor.payments.length,
+      unallocatedPaymentsCount: unallocatedCount,
       unallocatedPaymentsSum: unallocatedSum.toNumber(),
     },
   };

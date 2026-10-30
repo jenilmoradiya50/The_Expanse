@@ -42,9 +42,13 @@ interface BusinessDashboardProps {
     metrics: {
       totalRevenue: number;
       totalIncome?: number;
+      outputGst?: number;
+      estimatedInputTaxCredit?: number;
+      estimatedNetGstPayable?: number;
       totalGstCollected?: number;
       totalGstInputCredit?: number;
       netGstPayable?: number;
+      gstNotice?: string;
       totalPurchases?: number;
       totalExpenses: number;
       netProfit: number;
@@ -427,10 +431,20 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-4 text-zinc-500 text-[11px]">
+        <div className="flex flex-wrap items-center gap-4 text-zinc-500 text-[11px]">
           {metrics.netGstPayable !== undefined && (
-            <div>
-              Net GST Liability: <span className="font-semibold text-cyan-400">{formatCurrency(metrics.netGstPayable)}</span>
+            <div className="flex items-center gap-3 border-zinc-800 pr-2">
+              <span title="GST collected on sales invoices (Output Tax Liability)">
+                Output GST: <span className="font-semibold text-amber-300">{formatCurrency(metrics.totalGstCollected ?? 0)}</span>
+              </span>
+              <span className="text-zinc-700">|</span>
+              <span title="Potential ITC from purchase bills (subject to Section 16 & 17(5) statutory eligibility)">
+                Est. ITC: <span className="font-semibold text-emerald-300">{formatCurrency(metrics.totalGstInputCredit ?? 0)}</span>
+              </span>
+              <span className="text-zinc-700">|</span>
+              <span title="Estimated net balance due (Output GST - Est. ITC). Not a statutory tax filing.">
+                Est. Net GST: <span className="font-semibold text-cyan-400">{formatCurrency(metrics.netGstPayable)}</span>
+              </span>
             </div>
           )}
           <div>

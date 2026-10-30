@@ -232,9 +232,13 @@ export async function getBusinessMetrics(organizationId: string) {
   // 1. REVENUE (Accrual): Sum of taxable amounts (`subtotal`) of issued Sales Invoices.
   //    GST is an indirect tax collected in trust for the government (liability),
   //    not company revenue.
-  // 2. GST COLLECTED (Output Liability): Sum of `taxTotal` of issued Sales Invoices.
-  // 3. GST INPUT CREDIT: Sum of `taxTotal` of Purchase Bills.
-  // 4. NET GST PAYABLE: GST Collected minus GST Input Credit.
+  // 2. OUTPUT GST (Sales Liability): Sum of `taxTotal` of issued Sales Invoices.
+  // 3. ESTIMATED INPUT TAX CREDIT (Purchases): Sum of `taxTotal` on Purchase Bills.
+  //    IMPORTANT: Under Section 16 & 17(5) of the Indian CGST Act, purchase GST is NOT
+  //    automatically eligible for ITC without GSTR-2B matching, supplier tax payment,
+  //    and exclusion of blocked credits (e.g. personal consumption, vehicles, food).
+  //    This metric is an ESTIMATE for internal management planning, NOT a statutory claim.
+  // 4. ESTIMATED NET GST PAYABLE: Output GST minus Estimated Input Tax Credit.
   // 5. PURCHASES (Accrual): Sum of taxable amounts (`subtotal`) of Purchase Bills.
   // 6. DIRECT EXPENSES: Standalone business expenses. Non-vendor direct expenses
   //    are factored into cash outflow to prevent double-counting vendor bills.
@@ -308,9 +312,15 @@ export async function getBusinessMetrics(organizationId: string) {
     metrics: {
       totalRevenue: totalTaxableRevenue.toNumber(),
       totalIncome: totalTaxableRevenue.toNumber(), // Backwards-compatible alias
+      outputGst: totalGstCollected.toNumber(),
+      estimatedInputTaxCredit: totalGstInputCredit.toNumber(),
+      estimatedNetGstPayable: netGstPayable.toNumber(),
+      // Backwards-compatible aliases:
       totalGstCollected: totalGstCollected.toNumber(),
       totalGstInputCredit: totalGstInputCredit.toNumber(),
       netGstPayable: netGstPayable.toNumber(),
+      gstNotice:
+        "GST calculations are internal management estimates. Purchase GST is treated as potential Input Tax Credit (ITC) for estimation only; statutory claims under Section 16 & Section 17(5) require GSTR-2B reconciliation and vendor compliance. Not an official tax return.",
       totalPurchases: totalTaxablePurchases.toNumber(),
       totalExpenses: totalTaxablePurchases.plus(totalDirectExpenses).toNumber(),
       netProfit: netProfit.toNumber(),

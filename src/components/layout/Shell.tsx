@@ -38,9 +38,13 @@ interface ShellProps {
     metrics: {
       totalRevenue: number;
       totalIncome?: number;
+      outputGst?: number;
+      estimatedInputTaxCredit?: number;
+      estimatedNetGstPayable?: number;
       totalGstCollected?: number;
       totalGstInputCredit?: number;
       netGstPayable?: number;
+      gstNotice?: string;
       totalPurchases?: number;
       totalExpenses: number;
       netProfit: number;

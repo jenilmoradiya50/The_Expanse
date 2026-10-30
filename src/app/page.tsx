@@ -1,9 +1,13 @@
 import { Suspense } from "react";
+import { cookies } from "next/headers";
 import { getActiveTenantContext } from "@/lib/session";
 import { getBusinessMetrics, getPersonalMetrics } from "@/lib/actions";
 import { Shell } from "@/components/layout/Shell";
 
 async function DashboardLoader() {
+  // Access dynamic request cookies to trigger Next.js PPR dynamic streaming boundary
+  await cookies();
+
   // 1. Resolve server-side tenant and user identity
   const tenantContext = await getActiveTenantContext();
 

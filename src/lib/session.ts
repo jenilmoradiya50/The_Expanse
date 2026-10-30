@@ -42,12 +42,11 @@ export interface ActiveTenantContext {
  * or query parameters.
  */
 export async function getAuthenticatedUser(): Promise<AuthenticatedUser> {
-  // HARD PRODUCTION GUARD: The hardcoded development demo user must never be accepted in production.
-  // In production deployments (e.g. Vercel, cloud, or when ALLOW_DEV_DEMO_AUTH is false), reject hardcoded demo credentials.
-  const isProduction = process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
-  const allowDevDemo = process.env.ALLOW_DEV_DEMO_AUTH === "true";
+  // HARD PRODUCTION GUARD: Development demo authentication is strictly impossible whenever NODE_ENV is production.
+  // There is NO environment-variable override to enable demo credentials in production.
+  const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL === "1";
 
-  if (isProduction && !allowDevDemo) {
+  if (isProduction) {
     throw new Error(
       "AUTHENTICATION_REQUIRED: Production authentication provider (e.g. NextAuth/OIDC) must be configured. Development demo credentials are strictly prohibited in production."
     );

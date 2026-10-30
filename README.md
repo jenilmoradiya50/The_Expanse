@@ -35,15 +35,16 @@
 
 ---
 
-## 💼 Core Business Modules (Phase 4 & 4.1 Remediation)
+## 💼 Core Business Modules (Phase 4, 4.1 & 4.2 Verification)
 
-* **Financial Integrity & Atomicity (Phase 4.1):** All payment recordings (`recordPayment`), invoice creations (`createInvoice`), balance updates, and audit records execute within atomic interactive database transactions (`prisma.$transaction`). Concurrent race conditions and lost updates are prevented via optimistic conditional matching on invoice balances. Overpayments are strictly rejected.
-* **Document Sequence Engine (Phase 4.1):** Atomic, collision-free numbering via a dedicated `DocumentSequence` model scoped by `[organizationId, type, year]` (`INV-YYYY-XXXX`, `BILL-YYYY-XXXX`, `SO-YYYY-XXXX`, `PO-YYYY-XXXX`), eliminating race condition collisions of naive `count() + 1` patterns.
-* **Decoupled Order Lifecycle & Invoicing (Phase 4.1):** Line-item level tracking of `invoicedQuantity` and `fulfilledQuantity`. Invoicing does not prematurely complete orders (`invoicingStatus` transitions from `UNINVOICED` -> `PARTIALLY_INVOICED` -> `FULLY_INVOICED`), preserving fulfillment state. Over-invoicing is prevented at the item level.
+* **Strict Production Authentication Guard (Phase 4.2):** Development demo credentials are unconditionally impossible whenever `NODE_ENV === "production"`. Any environment-variable bypass (`ALLOW_DEV_DEMO_AUTH`) has been completely eliminated. Real production deployments strictly mandate official authentication provider integration (e.g. NextAuth/OIDC).
+* **Ledger Balance Reconciliation (Phase 4.2):** Robust reconciliation services (`reconcileCustomerBalance`, `reconcileVendorBalance`) compare cached balances against active invoices, partial payments, unallocated advances, and cancelled/archived records. Payments are strictly prevented from double deduction. When `autoFix` is enabled, balance corrections execute inside a database transaction and generate an immutable `AuditLog` entry.
+* **Statutory GST Accounting & Disclaimers (Phase 4.2):** Explicitly distinguishes Output GST liability (sales), Estimated Input Tax Credit (purchases), and Estimated Net GST Payable. Clearly notes that purchase GST is not automatically eligible for ITC without statutory GSTR-2B reconciliation and Section 17(5) blocked credit review.
+* **Financial Integrity & Atomicity:** All payment recordings (`recordPayment`), invoice creations (`createInvoice`), balance updates, and audit records execute within atomic interactive database transactions (`prisma.$transaction`). Concurrent race conditions and lost updates are prevented via optimistic conditional matching on invoice balances. Overpayments are strictly rejected.
+* **Document Sequence Engine:** Atomic, collision-free numbering via a dedicated `DocumentSequence` model scoped by `[organizationId, type, year]` (`INV-YYYY-XXXX`, `BILL-YYYY-XXXX`, `SO-YYYY-XXXX`, `PO-YYYY-XXXX`), eliminating race condition collisions of naive `count() + 1` patterns.
+* **Decoupled Order Lifecycle & Invoicing:** Line-item level tracking of `invoicedQuantity` and `fulfilledQuantity`. Invoicing does not prematurely complete orders (`invoicingStatus` transitions from `UNINVOICED` -> `PARTIALLY_INVOICED` -> `FULLY_INVOICED`), preserving fulfillment state. Over-invoicing is prevented at the item level.
 * **Master Data Uniqueness:** Enforced database-level uniqueness for `[organizationId, gstin]` on both `Customer` and `Vendor`, with proper normalization of empty strings to `null`.
 * **Payment Idempotency:** Enforced database-level uniqueness for `[organizationId, referenceNumber]` on `Payment` to prevent duplicate transaction entries.
-* **Ledger Reconciliation Service:** Non-silent reconciliation services (`reconcileCustomerBalance`, `reconcileVendorBalance`) compare cached master balances against posted invoice balances minus unallocated payments, with an optional atomic `autoFix` routine and audit logging.
-* **Statutory GST Accounting & Reporting:** Gross revenue correctly reflects taxable invoice subtotal (excluding pass-through GST). GST output liability and input tax credits are reported distinctly. Cash outflow calculations isolate vendor-cleared payments from standalone operational expenses, preventing double-counting.
 * **Customers & Suppliers (Vendors):** Contact profiles, GSTIN validation, state codes, payment terms, soft-archival (`isArchived`).
 * **Products & Services Catalog:** SKU uniqueness validation, HSN/SAC code tracking, physical units vs services, pricing, and applicable GST rate mapping.
 * **Sales & Purchase Orders:** Multi-line order authoring with real-time Decimal tax calculations (CGST/SGST for intra-state, IGST for inter-state), and discount calculations.
@@ -66,7 +67,7 @@ The_Expanse/
 │   ├── audit.test.ts           # Append-only immutability tests
 │   ├── business.test.ts        # Phase 4 Core Business Management tests
 │   ├── gst.test.ts             # Indian GST calculation & format tests
-│   ├── integrity.test.ts       # Phase 4.1 Financial Integrity & Concurrency tests (10 tests)
+│   ├── integrity.test.ts       # Phase 4.1 & 4.2 Financial Integrity & Concurrency tests (11 tests)
 │   ├── shell.test.ts           # Tenant context & workspace switching tests
 │   └── tenancy.test.ts         # Multi-tenant isolation & RBAC authorization tests
 ├── public/                     # Static assets

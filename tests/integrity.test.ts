@@ -4,6 +4,8 @@ import { prisma } from "../src/lib/prisma";
 import {
   createCustomer,
   createVendor,
+  archiveCustomer,
+  archiveVendor,
   createOrder,
   createInvoice,
   recordPayment,
@@ -372,17 +374,17 @@ test("Integrity - Over-Invoicing Against Order is Prevented", async () => {
   );
 });
 
-test("Integrity - Customer and Vendor Ledger Balance Reconciliation", async () => {
+test("Integrity - Comprehensive Customer Ledger Reconciliation (Partial, Unallocated, Cancelled, Archived, AutoFix)", async () => {
   const user = await prisma.user.findUnique({ where: { email: "jenil@theexpanse.local" } });
   const org = await prisma.organization.findUnique({ where: { slug: "expanse-tech" } });
   assert.ok(user && org);
 
   const customer = await createCustomer(user.id, org.id, {
-    name: `Reconciliation Customer ${Date.now()}`,
+    name: `Deep Reconcile Customer ${Date.now()}`,
   });
 
-  // Create Invoice for ₹15,000
-  const invoice = await createInvoice(user.id, org.id, {
+  // 1. Create Invoice 1: ₹10,000
+  const inv1 = await createInvoice(user.id, org.id, {
     type: "SALES",
     customerId: customer.id,
     invoiceDate: new Date(),
@@ -390,60 +392,198 @@ test("Integrity - Customer and Vendor Ledger Balance Reconciliation", async () =
     placeOfSupply: "24",
     items: [
       {
-        description: "Consulting Retainer",
+        description: "Cloud Architecture Service",
         hsnSacCode: "998314",
         quantity: 1,
-        unitPrice: 15000,
+        unitPrice: 10000,
         gstRate: 0,
       },
     ],
   });
 
-  // Payment of ₹5,000 -> Expected balance ₹10,000
+  // 2. Create Invoice 2: ₹5,000
+  const inv2 = await createInvoice(user.id, org.id, {
+    type: "SALES",
+    customerId: customer.id,
+    invoiceDate: new Date(),
+    dueDate: new Date(),
+    placeOfSupply: "24",
+    items: [
+      {
+        description: "Security Penetration Audit",
+        hsnSacCode: "998314",
+        quantity: 1,
+        unitPrice: 5000,
+        gstRate: 0,
+      },
+    ],
+  });
+
+  // Total billed = ₹15,000. Customer balance = ₹15,000.
+
+  // 3. Record PARTIAL payment of ₹4,000 on Invoice 1 (Invoice 1 due = ₹6,000)
   await recordPayment(user.id, org.id, {
     type: "INCOMING",
-    invoiceId: invoice.id,
-    amount: 5000,
+    invoiceId: inv1.id,
+    amount: 4000,
     paymentDate: new Date(),
-    referenceNumber: `UTR-REC-${Date.now()}`,
+    referenceNumber: `UTR-PART-${Date.now()}`,
   });
 
-  // 1. Check clean initial reconciliation
-  let report = await reconcileCustomerBalance(user.id, org.id, customer.id, false);
-  assert.equal(report.isReconciled, true);
-  assert.equal(report.discrepancy, 0);
-  assert.equal(report.expectedBalance, 10000);
-  assert.equal(report.cachedBalance, 10000);
-
-  // 2. Simulate balance drift / corruption
-  await prisma.customer.update({
-    where: { id: customer.id },
-    data: { balance: 99999 },
+  // 4. Record UNALLOCATED advance payment of ₹2,000 (invoiceId: null)
+  await recordPayment(user.id, org.id, {
+    type: "INCOMING",
+    customerId: customer.id,
+    amount: 2000,
+    paymentDate: new Date(),
+    referenceNumber: `UTR-ADV-${Date.now()}`,
   });
 
-  // 3. Detect drift without autoFix
-  report = await reconcileCustomerBalance(user.id, org.id, customer.id, false);
-  assert.equal(report.isReconciled, false);
-  assert.equal(report.cachedBalance, 99999);
-  assert.equal(report.expectedBalance, 10000);
-  assert.equal(report.discrepancy, 89999);
-  assert.equal(report.fixed, false);
+  // Expected balance: (6,000 remaining on inv1 + 5,000 on inv2) - 2,000 unallocated = ₹9,000.
+  // Note: The ₹4,000 payment was already subtracted from inv1 due. It is NOT deducted again.
+  let rep = await reconcileCustomerBalance(user.id, org.id, customer.id, false);
+  assert.equal(rep.isReconciled, true);
+  assert.equal(rep.discrepancy, 0);
+  assert.equal(rep.expectedBalance, 9000);
+  assert.equal(rep.cachedBalance, 9000);
+  assert.equal(rep.details.outstandingInvoicesCount, 2);
+  assert.equal(rep.details.outstandingInvoicesSum, 11000);
+  assert.equal(rep.details.unallocatedPaymentsCount, 1);
+  assert.equal(rep.details.unallocatedPaymentsSum, 2000);
 
-  // 4. Run reconciliation with autoFix = true
-  report = await reconcileCustomerBalance(user.id, org.id, customer.id, true);
-  assert.equal(report.fixed, true);
-  assert.equal(report.expectedBalance, 10000);
+  // 5. Test CANCELLED Invoice treatment:
+  // Cancel Invoice 2 (₹5,000)
+  await prisma.invoice.update({
+    where: { id: inv2.id },
+    data: { status: "CANCELLED" },
+  });
 
-  // Verify database balance was safely corrected
-  const refreshed = await prisma.customer.findUnique({ where: { id: customer.id } });
-  assert.equal(refreshed?.balance, 10000);
+  // Now outstanding invoices sum should only include inv1 (due ₹6,000).
+  // Expected balance: 6,000 - 2,000 = ₹4,000.
+  rep = await reconcileCustomerBalance(user.id, org.id, customer.id, false);
+  assert.equal(rep.isReconciled, false, "Discrepancy must be flagged because cached balance still includes cancelled invoice");
+  assert.equal(rep.expectedBalance, 4000);
+  assert.equal(rep.details.outstandingInvoicesCount, 1);
+  assert.equal(rep.details.outstandingInvoicesSum, 6000);
 
-  // Test Vendor reconciliation as well
+  // 6. Test autoFix transactional correction & audit logging
+  const initialAuditCount = await prisma.auditLog.count({
+    where: { entity: "CUSTOMER", entityId: customer.id },
+  });
+
+  rep = await reconcileCustomerBalance(user.id, org.id, customer.id, true);
+  assert.equal(rep.fixed, true);
+  assert.equal(rep.expectedBalance, 4000);
+
+  // Verify DB record is updated
+  const refreshedCust = await prisma.customer.findUnique({ where: { id: customer.id } });
+  assert.equal(refreshedCust?.balance, 4000);
+
+  // Verify AuditLog was recorded atomically
+  const postAuditCount = await prisma.auditLog.count({
+    where: { entity: "CUSTOMER", entityId: customer.id },
+  });
+  assert.equal(postAuditCount, initialAuditCount + 1, "autoFix must generate an immutable audit log");
+
+  const latestAudit = await prisma.auditLog.findFirst({
+    where: { entity: "CUSTOMER", entityId: customer.id },
+    orderBy: { createdAt: "desc" },
+  });
+  assert.equal(latestAudit?.action, "UPDATE");
+  assert.match(latestAudit?.newValues || "", /BALANCE_RECONCILED/);
+
+  // 7. Test ARCHIVED record reconciliation
+  await archiveCustomer(user.id, org.id, customer.id);
+  const archivedCust = await prisma.customer.findUnique({ where: { id: customer.id } });
+  assert.equal(archivedCust?.isArchived, true);
+
+  // Reconcile must still work accurately on archived customers
+  const archivedRep = await reconcileCustomerBalance(user.id, org.id, customer.id, false);
+  assert.equal(archivedRep.isReconciled, true);
+  assert.equal(archivedRep.expectedBalance, 4000);
+});
+
+test("Integrity - Comprehensive Vendor Ledger Reconciliation (Partial, Unallocated, Cancelled, Archived, AutoFix)", async () => {
+  const user = await prisma.user.findUnique({ where: { email: "jenil@theexpanse.local" } });
+  const org = await prisma.organization.findUnique({ where: { slug: "expanse-tech" } });
+  assert.ok(user && org);
+
   const vendor = await createVendor(user.id, org.id, {
-    name: `Reconciliation Vendor ${Date.now()}`,
+    name: `Deep Reconcile Vendor ${Date.now()}`,
   });
-  const vendReport = await reconcileVendorBalance(user.id, org.id, vendor.id);
-  assert.equal(vendReport.isReconciled, true);
+
+  // 1. Create Purchase Bill 1: ₹20,000
+  const bill1 = await createInvoice(user.id, org.id, {
+    type: "PURCHASE",
+    vendorId: vendor.id,
+    invoiceDate: new Date(),
+    dueDate: new Date(),
+    placeOfSupply: "24",
+    items: [
+      {
+        description: "Server Hardware Procurement",
+        hsnSacCode: "8471",
+        quantity: 1,
+        unitPrice: 20000,
+        gstRate: 0,
+      },
+    ],
+  });
+
+  // 2. Partial outgoing payment of ₹8,000 on Bill 1 (due ₹12,000)
+  await recordPayment(user.id, org.id, {
+    type: "OUTGOING",
+    invoiceId: bill1.id,
+    amount: 8000,
+    paymentDate: new Date(),
+    referenceNumber: `UTR-VEND-PART-${Date.now()}`,
+  });
+
+  // 3. Unallocated advance payment to vendor of ₹3,000
+  await recordPayment(user.id, org.id, {
+    type: "OUTGOING",
+    vendorId: vendor.id,
+    amount: 3000,
+    paymentDate: new Date(),
+    referenceNumber: `UTR-VEND-ADV-${Date.now()}`,
+  });
+
+  // Expected balance: 12,000 - 3,000 = ₹9,000
+  let rep = await reconcileVendorBalance(user.id, org.id, vendor.id, false);
+  assert.equal(rep.isReconciled, true);
+  assert.equal(rep.expectedBalance, 9000);
+  assert.equal(rep.cachedBalance, 9000);
+
+  // 4. Simulate corruption / drift
+  await prisma.vendor.update({
+    where: { id: vendor.id },
+    data: { balance: 55555 },
+  });
+
+  rep = await reconcileVendorBalance(user.id, org.id, vendor.id, false);
+  assert.equal(rep.isReconciled, false);
+  assert.equal(rep.discrepancy, 46555);
+
+  // 5. autoFix with audit logging
+  rep = await reconcileVendorBalance(user.id, org.id, vendor.id, true);
+  assert.equal(rep.fixed, true);
+  assert.equal(rep.expectedBalance, 9000);
+
+  const refreshedVend = await prisma.vendor.findUnique({ where: { id: vendor.id } });
+  assert.equal(refreshedVend?.balance, 9000);
+
+  const vendorAudit = await prisma.auditLog.findFirst({
+    where: { entity: "VENDOR", entityId: vendor.id },
+    orderBy: { createdAt: "desc" },
+  });
+  assert.equal(vendorAudit?.action, "UPDATE");
+  assert.match(vendorAudit?.newValues || "", /BALANCE_RECONCILED/);
+
+  // 6. Archived vendor reconciliation
+  await archiveVendor(user.id, org.id, vendor.id);
+  const archivedRep = await reconcileVendorBalance(user.id, org.id, vendor.id, false);
+  assert.equal(archivedRep.isReconciled, true);
+  assert.equal(archivedRep.expectedBalance, 9000);
 });
 
 test("Integrity - Transaction Rollback Upon Failure Leaves Zero Orphan Records", async () => {
@@ -542,16 +682,41 @@ test("Integrity - Financial Calculations Exclude GST from Revenue and Prevent Ou
   assert.ok(typeof metrics.metrics.cashOutflow === "number");
 });
 
-test("Integrity - Production Security Guard Rejects Hardcoded Demo User in Production", async () => {
-  const originalNodeEnv = process.env.NODE_ENV;
-  const originalAllowDevDemo = process.env.ALLOW_DEV_DEMO_AUTH;
-  const originalVercel = process.env.VERCEL;
+test("Integrity - Production Security Guard: Demo Authentication is IMPOSSIBLE in Production", async () => {
+  const env = process.env as Record<string, string | undefined>;
+  const originalNodeEnv = env.NODE_ENV;
+  const originalVercel = env.VERCEL;
 
   try {
-    process.env.NODE_ENV = "production";
-    delete process.env.ALLOW_DEV_DEMO_AUTH;
-    delete process.env.VERCEL;
+    env.NODE_ENV = "production";
+    delete env.VERCEL;
 
+    // 1. Must reject unconditionally in production
+    await assert.rejects(
+      async () => {
+        await getAuthenticatedUser();
+      },
+      {
+        name: "Error",
+        message: /AUTHENTICATION_REQUIRED/,
+      }
+    );
+
+    // 2. Reject even if any environment variable override is attempted
+    env.ALLOW_DEV_DEMO_AUTH = "true";
+    await assert.rejects(
+      async () => {
+        await getAuthenticatedUser();
+      },
+      {
+        name: "Error",
+        message: /AUTHENTICATION_REQUIRED/,
+      }
+    );
+
+    // 3. Reject if VERCEL="1" environment is simulated
+    env.NODE_ENV = "development";
+    env.VERCEL = "1";
     await assert.rejects(
       async () => {
         await getAuthenticatedUser();
@@ -562,16 +727,12 @@ test("Integrity - Production Security Guard Rejects Hardcoded Demo User in Produ
       }
     );
   } finally {
-    process.env.NODE_ENV = originalNodeEnv;
-    if (originalAllowDevDemo !== undefined) {
-      process.env.ALLOW_DEV_DEMO_AUTH = originalAllowDevDemo;
-    } else {
-      delete process.env.ALLOW_DEV_DEMO_AUTH;
-    }
+    env.NODE_ENV = originalNodeEnv;
+    delete env.ALLOW_DEV_DEMO_AUTH;
     if (originalVercel !== undefined) {
-      process.env.VERCEL = originalVercel;
+      env.VERCEL = originalVercel;
     } else {
-      delete process.env.VERCEL;
+      delete env.VERCEL;
     }
   }
 });

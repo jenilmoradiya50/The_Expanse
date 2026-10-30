@@ -4,6 +4,24 @@ import { INDIAN_STATE_CODES } from "@/types";
 // Configure Decimal for financial precision (28 digits precision, standard half-up rounding)
 Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 
+/**
+ * Indian GST Engine & Validation Service
+ *
+ * IMPORTANT STATUTORY & REGULATORY DISCLAIMERS:
+ * 1. This module provides internal arithmetic calculations and structural validation for
+ *    Indian Goods and Services Tax (GST: CGST, SGST, IGST) based on standard rates.
+ * 2. STRUCTURAL VALIDATION ONLY: `validateGstin()` validates 15-character syntax, state codes,
+ *    and PAN patterns. It does NOT verify live active taxpayer registration or filing status
+ *    on the official GST Common Portal (requires licensed GSP/ASP API connectivity).
+ * 3. INPUT TAX CREDIT (ITC) LIMITATIONS: Purchase GST is tracked as potential input tax for
+ *    management estimates. It does NOT constitute statutory eligibility for ITC under Section 16
+ *    or Section 17(5) of the CGST Act (which requires supplier filing on GSTR-1, appearance on
+ *    the buyer's GSTR-2B, actual tax remittance to the government, and exclusion of blocked credits).
+ * 4. NO STATUTORY COMPLIANCE CLAIM: This application does not file statutory GST returns
+ *    (GSTR-1, GSTR-3B, GSTR-9) and must not be used as an official statutory filing platform
+ *    without verified independent tax auditor / chartered accountant reconciliation.
+ */
+
 // Official 15-character Indian GSTIN regular expression
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
 
