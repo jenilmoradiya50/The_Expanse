@@ -1,0 +1,391 @@
+// =============================================================================
+// The Expanse - Multi-Tenant Financial Management Architecture Schema
+//
+// Designed for seamless transition from SQLite (local dev) to Neon PostgreSQL (production).
+// Supports: Multi-tenancy, RBAC, Indian GST, Financial Audits, Business & Personal Finance.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// 1. Identity, Users & Multi-Tenancy Core
+// -----------------------------------------------------------------------------
+
+model User {
+  id                   String                @id @default(cuid())
+  email                String                @unique
+  name                 String?
+  passwordHash         String?
+  avatarUrl            String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  // Tenant Memberships
+  memberships          Membership[]
+
+  // Personal Finance Domain
+  personalAccounts     PersonalAccount[]
+  personalCategories   PersonalCategory[]
+  personalTransactions PersonalTransaction[]
+  personalBudgets      PersonalBudget[]
+
+  // Audit Logs
+  auditLogs            AuditLog[]
+
+  @@index([email])
+}
+
+model Organization {
+  id               String               @id @default(cuid())
+  name             String
+  slug             String               @unique
+  logoUrl          String?
+  currency         String               @default("INR")
+  timezone         String               @default("Asia/Kolkata")
+  fiscalYearStart  Int                  @default(4) // April for Indian financial year
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  // Multi-Tenancy & Access
+  memberships      Membership[]
+  invitations      OrganizationInvitation[]
+
+  // Indian GST Compliance Profile
+  gstProfile       GstProfile?
+
+  // Business Domain
+  customers        Customer[]
+  vendors          Vendor[]
+  invoices         Invoice[]
+  expenses         BusinessExpense[]
+
+  // Audit History & Attachments
+  auditLogs        AuditLog[]
+  attachments      Attachment[]
+
+  @@index([slug])
+}
+
+model Membership {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  role           String       @default("VIEWER") // OWNER, ADMIN, ACCOUNTANT, VIEWER
+  isDefault      Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@index([organizationId])
+}
+
+model OrganizationInvitation {
+  id             String       @id @default(cuid())
+  organizationId String
+  email          String
+  role           String       @default("VIEWER")
+  token          String       @unique
+  expiresAt      DateTime
+  status         String       @default("PENDING") // PENDING, ACCEPTED, REVOKED, EXPIRED
+  createdAt      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([token])
+}
+
+// -----------------------------------------------------------------------------
+// 2. Indian GST Compliance Profile
+// -----------------------------------------------------------------------------
+
+model GstProfile {
+  id                String       @id @default(cuid())
+  organizationId    String       @unique
+  gstin             String       @unique // 15-character Indian GSTIN
+  legalName         String
+  tradeName         String?
+  pan               String       // 10-character PAN extracted from GSTIN
+  stateCode         String       // 2-digit Indian State Code (e.g. 24 for Gujarat, 27 for Maharashtra)
+  stateName         String
+  isComposition     Boolean      @default(false)
+  registeredAddress String
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+// -----------------------------------------------------------------------------
+// 3. Immutable Financial Audit Trail
+// -----------------------------------------------------------------------------
+
+model AuditLog {
+  id             String        @id @default(cuid())
+  organizationId String?
+  userId         String?
+  action         String        // CREATE, UPDATE, DELETE, EXPORT, STATUS_CHANGE
+  entity         String        // INVOICE, EXPENSE, CUSTOMER, VENDOR, GST_PROFILE, MEMBERSHIP
+  entityId       String
+  oldValues      String?       // JSON serialized state before change
+  newValues      String?       // JSON serialized state after change
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime      @default(now())
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([entity, entityId])
+  @@index([userId])
+}
+
+// -----------------------------------------------------------------------------
+// 4. Business Financial Management (Commercial Domain)
+// -----------------------------------------------------------------------------
+
+model Customer {
+  id              String       @id @default(cuid())
+  organizationId  String
+  name            String
+  email           String?
+  phone           String?
+  gstin           String?
+  pan             String?
+  stateCode       String?      // Place of Supply identification
+  billingAddress  String?
+  shippingAddress String?
+  balance         Float        @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices        Invoice[]
+
+  @@index([organizationId])
+}
+
+model Vendor {
+  id                String            @id @default(cuid())
+  organizationId    String
+  name              String
+  email             String?
+  phone             String?
+  gstin             String?
+  pan               String?
+  address           String?
+  bankName          String?
+  bankAccountNumber String?
+  bankIfsc          String?
+  balance           Float             @default(0)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  expenses          BusinessExpense[]
+
+  @@index([organizationId])
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  organizationId String
+  customerId     String
+  invoiceNumber  String        // e.g. EXP-2026-001
+  invoiceDate    DateTime
+  dueDate        DateTime
+  placeOfSupply  String        // 2-digit Indian State Code
+  isInterState   Boolean       @default(false) // true: IGST, false: CGST + SGST
+  status         String        @default("DRAFT") // DRAFT, ISSUED, PAID, PARTIALLY_PAID, OVERDUE, CANCELLED
+  subtotal       Float         @default(0)
+  cgstTotal      Float         @default(0)
+  sgstTotal      Float         @default(0)
+  igstTotal      Float         @default(0)
+  taxTotal       Float         @default(0)
+  discountTotal  Float         @default(0)
+  grandTotal     Float         @default(0)
+  amountPaid     Float         @default(0)
+  notes          String?
+  terms          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer      @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items          InvoiceItem[]
+  attachments    Attachment[]
+
+  @@unique([organizationId, invoiceNumber])
+  @@index([organizationId, status])
+  @@index([customerId])
+}
+
+model InvoiceItem {
+  id            String   @id @default(cuid())
+  invoiceId     String
+  description   String
+  hsnSacCode    String   // HSN/SAC Indian Tax classification code
+  quantity      Float    @default(1)
+  unit          String   @default("NOS")
+  unitPrice     Float
+  discount      Float    @default(0)
+  taxableAmount Float
+  gstRate       Float    // Slabs: 0, 5, 12, 18, 28 (%)
+  cgstRate      Float    @default(0)
+  cgstAmount    Float    @default(0)
+  sgstRate      Float    @default(0)
+  sgstAmount    Float    @default(0)
+  igstRate      Float    @default(0)
+  igstAmount    Float    @default(0)
+  totalAmount   Float
+
+  invoice       Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+model BusinessExpense {
+  id              String       @id @default(cuid())
+  organizationId  String
+  vendorId        String?
+  category        String       // OFFICE, TRAVEL, UTILITIES, RENT, SALARIES, MARKETING, OTHER
+  expenseDate     DateTime
+  amount          Float
+  taxAmount       Float        @default(0)
+  gstRate         Float?       // Slabs: 0, 5, 12, 18, 28 (%)
+  gstin           String?
+  hsnSacCode      String?
+  isItcEligible   Boolean      @default(true) // Input Tax Credit eligibility under GST
+  paymentMethod   String       @default("BANK_TRANSFER") // BANK_TRANSFER, UPI, CARD, CASH
+  paymentStatus   String       @default("PAID") // PAID, PENDING
+  referenceNumber String?
+  notes           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vendor          Vendor?      @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  attachments     Attachment[]
+
+  @@index([organizationId, expenseDate])
+  @@index([vendorId])
+}
+
+// -----------------------------------------------------------------------------
+// 5. Personal Financial Management (Individual Domain)
+// -----------------------------------------------------------------------------
+
+model PersonalAccount {
+  id                 String                @id @default(cuid())
+  userId             String
+  name               String                // e.g. HDFC Salary, SBI Savings, Cash
+  type               String                @default("SAVINGS") // SAVINGS, CURRENT, CREDIT_CARD, INVESTMENT, WALLET, CASH
+  currency           String                @default("INR")
+  initialBalance     Float                 @default(0)
+  currentBalance     Float                 @default(0)
+  accountNumberLast4 String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  user               User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions       PersonalTransaction[]
+
+  @@index([userId])
+}
+
+model PersonalCategory {
+  id           String                @id @default(cuid())
+  userId       String
+  name         String                // e.g. Groceries, Fuel, Salary, Utilities
+  type         String                // INCOME, EXPENSE
+  icon         String?
+  color        String?
+  createdAt    DateTime              @default(now())
+
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions PersonalTransaction[]
+  budgets      PersonalBudget[]
+
+  @@index([userId])
+}
+
+model PersonalTransaction {
+  id              String            @id @default(cuid())
+  userId          String
+  accountId       String
+  categoryId      String?
+  type            String            // INCOME, EXPENSE, TRANSFER
+  amount          Float
+  transactionDate DateTime
+  payee           String?
+  description     String?
+  isReimbursable  Boolean           @default(false) // Linkable to business expense reimbursement
+  isReimbursed    Boolean           @default(false)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account         PersonalAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  category        PersonalCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  attachments     Attachment[]
+
+  @@index([userId, transactionDate])
+  @@index([accountId])
+  @@index([categoryId])
+}
+
+model PersonalBudget {
+  id         String           @id @default(cuid())
+  userId     String
+  categoryId String
+  amount     Float
+  period     String           @default("MONTHLY") // MONTHLY, YEARLY
+  month      Int?
+  year       Int
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category   PersonalCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId, year, month])
+  @@index([userId])
+}
+
+// -----------------------------------------------------------------------------
+// 6. Polymorphic Document Attachments
+// -----------------------------------------------------------------------------
+
+model Attachment {
+  id                    String               @id @default(cuid())
+  organizationId        String?
+  userId                String
+  fileName              String
+  fileUrl               String
+  fileType              String
+  fileSize              Int
+  invoiceId             String?
+  businessExpenseId     String?
+  personalTransactionId String?
+  createdAt             DateTime             @default(now())
+
+  organization          Organization?        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice               Invoice?             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  businessExpense       BusinessExpense?     @relation(fields: [businessExpenseId], references: [id], onDelete: Cascade)
+  personalTransaction   PersonalTransaction? @relation(fields: [personalTransactionId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([userId])
+}

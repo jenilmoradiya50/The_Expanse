@@ -13,9 +13,10 @@
 | **Framework** | [Next.js](https://nextjs.org/) (App Router, React 19) | Initialized |
 | **Language** | [TypeScript](https://www.typescriptlang.org/) | Initialized |
 | **Styling** | [Tailwind CSS v4](https://tailwindcss.com/) | Initialized |
-| **Database** | [Neon PostgreSQL](https://neon.tech/) (Serverless Postgres) | Pending Phase 1 |
-| **ORM** | [Prisma](https://www.prisma.io/) | Pending Phase 1 |
-| **Deployment** | [Vercel](https://vercel.com/) | Configured for deployment |
+| **Local Database** | [SQLite](https://www.sqlite.org/) via Prisma | Active (Local Development) |
+| **Production Database** | [Neon PostgreSQL](https://neon.tech/) | Migration ready prior to production |
+| **ORM** | [Prisma](https://www.prisma.io/) | Initializing |
+| **Production Deployment** | [Vercel](https://vercel.com/) | Gated (Planned at 70–80% feature milestone upon owner approval) |
 | **Version Control** | GitHub (`jenilmoradiya50/The_Expanse`) | Main branch active |
 
 ---
