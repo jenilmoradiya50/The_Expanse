@@ -45,6 +45,13 @@ The_Expanse/
 ├── next.config.ts              # Next.js configuration
 ├── package.json                # Project dependencies and scripts
 ├── tsconfig.json               # TypeScript configuration with @/* path alias
+├── prisma/
+│   ├── schema.prisma           # Multi-tenant data models (SQLite dev / Neon prod)
+│   └── seed.ts                 # Demo & synthetic development seeder
+├── tests/                      # Automated test suite (tsx + node:test)
+│   ├── audit.test.ts           # Append-only immutability tests
+│   ├── gst.test.ts             # Indian GST calculation & format tests
+│   └── tenancy.test.ts         # Multi-tenant isolation & RBAC authorization tests
 ├── public/                     # Static assets
 └── src/
     ├── app/                    # Next.js App Router (pages, layouts, routes)
@@ -54,9 +61,14 @@ The_Expanse/
     ├── components/             # Reusable UI & domain components
     │   ├── ui/                 # Atomic UI primitives
     │   └── shared/             # Shared layout and navigation components
-    ├── lib/                    # Shared utility functions and singletons
-    │   └── utils.ts            # Class merging and common helpers
+    ├── lib/                    # Core Services & Business Logic
+    │   ├── audit.ts            # Append-only audit logging service
+    │   ├── gst.ts              # Indian GST engine with Decimal precision
+    │   ├── prisma.ts           # Prisma client with immutable audit extension
+    │   ├── tenancy.ts          # Server-side tenant authorization & RBAC
+    │   └── utils.ts            # Common helpers
     └── types/                  # Shared TypeScript type definitions
+        ├── database.ts         # Enums, roles, and GST state codes
         └── index.ts            # Base application types
 ```
 
@@ -88,13 +100,24 @@ The_Expanse/
    npm.cmd install
    ```
 
-4. **Run Development Server:**
+4. **Initialize & Seed Local Database:**
+   ```bash
+   npx.cmd prisma db push
+   npx.cmd prisma db seed
+   ```
+
+5. **Run Automated Tests:**
+   ```bash
+   npm.cmd run test
+   ```
+
+6. **Run Development Server:**
    ```bash
    npm.cmd run dev
    ```
    Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-5. **Build for Production:**
+7. **Build for Production:**
    ```bash
    npm.cmd run build
    ```
