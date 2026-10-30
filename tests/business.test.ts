@@ -412,11 +412,12 @@ test("Business - Order to Invoice Conversion", async () => {
 
   assert.equal(invoice.orderId, order.id);
 
-  // Verify the linked order status changed to COMPLETED
+  // Verify the linked order invoicingStatus is FULLY_INVOICED and status is preserved
   const refreshedOrder = await prisma.order.findUnique({
     where: { id: order.id },
   });
-  assert.equal(refreshedOrder?.status, "COMPLETED", "Converted order status must be COMPLETED");
+  assert.equal(refreshedOrder?.invoicingStatus, "FULLY_INVOICED", "Invoiced order invoicingStatus must be FULLY_INVOICED");
+  assert.notEqual(refreshedOrder?.status, "COMPLETED", "Invoicing an order must not prematurely mark fulfilment as COMPLETED");
 });
 
 test("Business - Payments, Partial Settlement, Overpayment Guard & Ledger Decrement", async () => {

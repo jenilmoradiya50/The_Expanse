@@ -41,6 +41,7 @@ export const AuditEntity = {
   PERSONAL_TRANSACTION: "PERSONAL_TRANSACTION",
   PERSONAL_BUDGET: "PERSONAL_BUDGET",
   ATTACHMENT: "ATTACHMENT",
+  DOCUMENT_SEQUENCE: "DOCUMENT_SEQUENCE",
 } as const;
 
 export type AuditEntityType = (typeof AuditEntity)[keyof typeof AuditEntity];
@@ -73,6 +74,14 @@ export const OrderStatus = {
 } as const;
 
 export type OrderStatusType = (typeof OrderStatus)[keyof typeof OrderStatus];
+
+export const InvoicingStatus = {
+  UNINVOICED: "UNINVOICED",
+  PARTIALLY_INVOICED: "PARTIALLY_INVOICED",
+  FULLY_INVOICED: "FULLY_INVOICED",
+} as const;
+
+export type InvoicingStatusType = (typeof InvoicingStatus)[keyof typeof InvoicingStatus];
 
 export const OrderType = {
   SALES: "SALES",

@@ -16,6 +16,8 @@ import {
   createOrder,
   createInvoice,
   recordPayment,
+  reconcileCustomerBalance,
+  reconcileVendorBalance,
   type CustomerInput,
   type VendorInput,
   type ProductInput,
@@ -126,6 +128,32 @@ export async function recordPaymentAction(organizationId: string, data: PaymentI
   return payment;
 }
 
+export async function reconcileCustomerBalanceAction(
+  organizationId: string,
+  customerId: string,
+  autoFix = false
+) {
+  const user = await getAuthenticatedUser();
+  const res = await reconcileCustomerBalance(user.id, organizationId, customerId, autoFix);
+  if (autoFix && res.fixed) {
+    revalidatePath("/");
+  }
+  return res;
+}
+
+export async function reconcileVendorBalanceAction(
+  organizationId: string,
+  vendorId: string,
+  autoFix = false
+) {
+  const user = await getAuthenticatedUser();
+  const res = await reconcileVendorBalance(user.id, organizationId, vendorId, autoFix);
+  if (autoFix && res.fixed) {
+    revalidatePath("/");
+  }
+  return res;
+}
+
 // =============================================================================
 // METRICS LOADERS
 // =============================================================================
@@ -198,30 +226,61 @@ export async function getBusinessMetrics(organizationId: string) {
     }),
   ]);
 
-  // High-precision Decimal Aggregations
-  let totalRevenue = new Decimal(0);
+  // =============================================================================
+  // FINANCIAL CALCULATION RULES (Statutory Accrual & Cash Accounting)
+  //
+  // 1. REVENUE (Accrual): Sum of taxable amounts (`subtotal`) of issued Sales Invoices.
+  //    GST is an indirect tax collected in trust for the government (liability),
+  //    not company revenue.
+  // 2. GST COLLECTED (Output Liability): Sum of `taxTotal` of issued Sales Invoices.
+  // 3. GST INPUT CREDIT: Sum of `taxTotal` of Purchase Bills.
+  // 4. NET GST PAYABLE: GST Collected minus GST Input Credit.
+  // 5. PURCHASES (Accrual): Sum of taxable amounts (`subtotal`) of Purchase Bills.
+  // 6. DIRECT EXPENSES: Standalone business expenses. Non-vendor direct expenses
+  //    are factored into cash outflow to prevent double-counting vendor bills.
+  // 7. OPERATING PROFIT (Accrual): Revenue (taxable) minus Purchases (taxable) minus Direct Expenses.
+  // 8. CASH INFLOW: Sum of completed incoming payments received from customers.
+  // 9. CASH OUTFLOW: Sum of completed outgoing payments to vendors plus non-vendor direct expenses.
+  // 10. NET CASH FLOW: Cash Inflow minus Cash Outflow.
+  // 11. OUTSTANDING RECEIVABLES: Sum of unpaid balances on Sales Invoices (`grandTotal - amountPaid`).
+  // 12. OUTSTANDING PAYABLES: Sum of unpaid balances on Purchase Bills (`grandTotal - amountPaid`).
+  // =============================================================================
+
+  let totalTaxableRevenue = new Decimal(0);
+  let totalGstCollected = new Decimal(0);
   let outstandingReceivables = new Decimal(0);
+
   for (const inv of salesInvoices) {
-    totalRevenue = totalRevenue.plus(inv.grandTotal);
+    totalTaxableRevenue = totalTaxableRevenue.plus(inv.subtotal);
+    totalGstCollected = totalGstCollected.plus(inv.taxTotal);
     const due = new Decimal(inv.grandTotal).minus(inv.amountPaid);
     if (due.greaterThan(0)) {
       outstandingReceivables = outstandingReceivables.plus(due);
     }
   }
 
-  let totalPurchases = new Decimal(0);
+  let totalTaxablePurchases = new Decimal(0);
+  let totalGstInputCredit = new Decimal(0);
   let outstandingPayables = new Decimal(0);
+
   for (const bill of purchaseInvoices) {
-    totalPurchases = totalPurchases.plus(bill.grandTotal);
+    totalTaxablePurchases = totalTaxablePurchases.plus(bill.subtotal);
+    totalGstInputCredit = totalGstInputCredit.plus(bill.taxTotal);
     const due = new Decimal(bill.grandTotal).minus(bill.amountPaid);
     if (due.greaterThan(0)) {
       outstandingPayables = outstandingPayables.plus(due);
     }
   }
 
+  const netGstPayable = totalGstCollected.minus(totalGstInputCredit);
+
   let totalDirectExpenses = new Decimal(0);
+  let directExpensesWithoutVendor = new Decimal(0);
   for (const exp of expenses) {
     totalDirectExpenses = totalDirectExpenses.plus(exp.amount);
+    if (!exp.vendorId) {
+      directExpensesWithoutVendor = directExpensesWithoutVendor.plus(exp.amount);
+    }
   }
 
   let cashInflow = new Decimal(0);
@@ -233,10 +292,11 @@ export async function getBusinessMetrics(organizationId: string) {
   for (const p of outgoingPayments) {
     cashOutflow = cashOutflow.plus(p.amount);
   }
-  cashOutflow = cashOutflow.plus(totalDirectExpenses);
+  // Add direct non-vendor expenses to cash outflow (prevents double counting vendor expenses)
+  cashOutflow = cashOutflow.plus(directExpensesWithoutVendor);
 
   const netCashFlow = cashInflow.minus(cashOutflow);
-  const netProfit = totalRevenue.minus(totalPurchases).minus(totalDirectExpenses);
+  const netProfit = totalTaxableRevenue.minus(totalTaxablePurchases).minus(totalDirectExpenses);
 
   return {
     organization: {
@@ -246,9 +306,13 @@ export async function getBusinessMetrics(organizationId: string) {
       role: context.role,
     },
     metrics: {
-      totalRevenue: totalRevenue.toNumber(),
-      totalIncome: totalRevenue.toNumber(),
-      totalExpenses: totalPurchases.plus(totalDirectExpenses).toNumber(),
+      totalRevenue: totalTaxableRevenue.toNumber(),
+      totalIncome: totalTaxableRevenue.toNumber(), // Backwards-compatible alias
+      totalGstCollected: totalGstCollected.toNumber(),
+      totalGstInputCredit: totalGstInputCredit.toNumber(),
+      netGstPayable: netGstPayable.toNumber(),
+      totalPurchases: totalTaxablePurchases.toNumber(),
+      totalExpenses: totalTaxablePurchases.plus(totalDirectExpenses).toNumber(),
       netProfit: netProfit.toNumber(),
       cashInflow: cashInflow.toNumber(),
       cashOutflow: cashOutflow.toNumber(),

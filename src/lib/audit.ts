@@ -25,10 +25,16 @@ export interface AuditQueryFilter {
 /**
  * Records an immutable audit log entry.
  * Audit records cannot be modified or deleted once persisted.
+ * Can be executed inside an interactive transaction (tx) for atomicity.
  */
-export async function recordAuditLog(params: CreateAuditLogParams) {
+export async function recordAuditLog(
+  params: CreateAuditLogParams,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  tx?: any
+) {
   try {
-    return await prisma.auditLog.create({
+    const client = tx ?? prisma;
+    return await client.auditLog.create({
       data: {
         organizationId: params.organizationId ?? null,
         userId: params.userId ?? null,

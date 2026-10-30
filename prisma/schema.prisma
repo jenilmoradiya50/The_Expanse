@@ -68,6 +68,7 @@ model Organization {
   invoices         Invoice[]
   expenses         BusinessExpense[]
   payments         Payment[]
+  documentSequences DocumentSequence[]
 
   // Audit History & Attachments
   auditLogs        AuditLog[]
@@ -181,6 +182,7 @@ model Customer {
   invoices        Invoice[]
   payments        Payment[]
 
+  @@unique([organizationId, gstin])
   @@index([organizationId, isArchived])
 }
 
@@ -209,6 +211,7 @@ model Vendor {
   expenses          BusinessExpense[]
   payments          Payment[]
 
+  @@unique([organizationId, gstin])
   @@index([organizationId, isArchived])
 }
 
@@ -247,6 +250,7 @@ model Order {
   orderDate            DateTime
   expectedDeliveryDate DateTime?
   status               String        @default("DRAFT") // DRAFT, SUBMITTED, APPROVED, PARTIALLY_FULFILLED, COMPLETED, CANCELLED
+  invoicingStatus      String        @default("UNINVOICED") // UNINVOICED, PARTIALLY_INVOICED, FULLY_INVOICED
   placeOfSupply        String        // 2-digit Indian State Code
   isInterState         Boolean       @default(false)
   subtotal             Float         @default(0)
@@ -276,9 +280,11 @@ model OrderItem {
   orderId       String
   productId     String?
   description   String
-  hsnSacCode    String
-  quantity      Float    @default(1)
-  unit          String   @default("NOS")
+  hsnSacCode        String
+  quantity          Float    @default(1)
+  invoicedQuantity  Float    @default(0)
+  fulfilledQuantity Float    @default(0)
+  unit              String   @default("NOS")
   unitPrice     Float
   discount      Float    @default(0)
   taxableAmount Float
@@ -387,8 +393,24 @@ model Payment {
   vendor          Vendor?       @relation(fields: [vendorId], references: [id], onDelete: SetNull)
 
   @@unique([organizationId, paymentNumber])
+  @@unique([organizationId, referenceNumber])
   @@index([organizationId, type])
   @@index([invoiceId])
+}
+
+model DocumentSequence {
+  id             String       @id @default(cuid())
+  organizationId String
+  type           String       // SALES_ORDER, PURCHASE_ORDER, SALES_INVOICE, PURCHASE_INVOICE, INCOMING_PAYMENT, OUTGOING_PAYMENT
+  year           Int          // Calendar or financial year
+  currentValue   Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, type, year])
+  @@index([organizationId])
 }
 
 model BusinessExpense {

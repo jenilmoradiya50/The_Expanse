@@ -41,6 +41,11 @@ interface BusinessDashboardProps {
     };
     metrics: {
       totalRevenue: number;
+      totalIncome?: number;
+      totalGstCollected?: number;
+      totalGstInputCredit?: number;
+      netGstPayable?: number;
+      totalPurchases?: number;
       totalExpenses: number;
       netProfit: number;
       cashInflow: number;
@@ -422,8 +427,15 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
             </div>
           </div>
         </div>
-        <div className="text-zinc-500 text-[11px]">
-          Payables Due: <span className="font-semibold text-zinc-300">{formatCurrency(metrics.outstandingPayables)}</span>
+        <div className="flex items-center gap-4 text-zinc-500 text-[11px]">
+          {metrics.netGstPayable !== undefined && (
+            <div>
+              Net GST Liability: <span className="font-semibold text-cyan-400">{formatCurrency(metrics.netGstPayable)}</span>
+            </div>
+          )}
+          <div>
+            Payables Due: <span className="font-semibold text-zinc-300">{formatCurrency(metrics.outstandingPayables)}</span>
+          </div>
         </div>
       </div>
 
