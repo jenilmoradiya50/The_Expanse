@@ -59,6 +59,10 @@ interface ShellProps {
       customersCount: number;
       vendorsCount: number;
       productsCount: number;
+      warehousesCount?: number;
+      stockLocationsCount?: number;
+      totalInventoryUnits?: number;
+      totalInventoryValuation?: number;
       isDemoDataNotice: string;
     };
     lists: {
@@ -93,6 +97,8 @@ interface ShellProps {
         hsnSacCode: string;
         gstRate: number;
         isActive: boolean;
+        trackInventory?: boolean;
+        currentStock?: number;
       }>;
       orders: Array<{
         id: string;
@@ -126,6 +132,54 @@ interface ShellProps {
         referenceNumber: string | null;
         partnerName?: string | null;
         invoiceNumber: string | null;
+      }>;
+      warehouses?: Array<{
+        id: string;
+        name: string;
+        code: string;
+        address?: string | null;
+        contactPhone?: string | null;
+        contactEmail?: string | null;
+        locationsCount: number;
+      }>;
+      stockLocations?: Array<{
+        id: string;
+        name: string;
+        code: string;
+        description?: string | null;
+        warehouseId: string;
+        warehouseName: string;
+        warehouseCode: string;
+      }>;
+      stockBalances?: Array<{
+        id: string;
+        productId: string;
+        productName: string;
+        productSku?: string | null;
+        productUnit: string;
+        locationId: string;
+        locationName: string;
+        locationCode: string;
+        warehouseName: string;
+        warehouseCode: string;
+        quantity: number;
+        valuation: number;
+      }>;
+      stockMovements?: Array<{
+        id: string;
+        movementNumber: string;
+        type: string;
+        productId: string;
+        productName: string;
+        productSku?: string | null;
+        productUnit: string;
+        quantity: number;
+        fromLocation?: string | null;
+        toLocation?: string | null;
+        referenceNumber?: string | null;
+        reason?: string | null;
+        userName: string;
+        createdAt: string;
       }>;
     };
     recentActivity: Array<{

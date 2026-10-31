@@ -36,6 +36,9 @@ model User {
   personalTransactions PersonalTransaction[]
   personalBudgets      PersonalBudget[]
 
+  // Inventory & Stock
+  stockMovements       StockMovement[]
+
   // Audit Logs
   auditLogs            AuditLog[]
 
@@ -69,6 +72,10 @@ model Organization {
   expenses         BusinessExpense[]
   payments         Payment[]
   documentSequences DocumentSequence[]
+  warehouses       Warehouse[]
+  stockLocations   StockLocation[]
+  stockMovements   StockMovement[]
+  stockBalances    StockBalance[]
 
   // Audit History & Attachments
   auditLogs        AuditLog[]
@@ -229,12 +236,15 @@ model Product {
   gstRate        Float         @default(18)
   isActive       Boolean       @default(true)
   isArchived     Boolean       @default(false)
+  trackInventory Boolean       @default(true)
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
   organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   orderItems     OrderItem[]
   invoiceItems   InvoiceItem[]
+  stockBalances  StockBalance[]
+  stockMovements StockMovement[]
 
   @@unique([organizationId, sku])
   @@index([organizationId, isActive, isArchived])
@@ -438,6 +448,92 @@ model BusinessExpense {
 
   @@index([organizationId, expenseDate])
   @@index([vendorId])
+}
+
+// -----------------------------------------------------------------------------
+// 4.1. Inventory & Warehouse Management (Phase 5.1)
+// -----------------------------------------------------------------------------
+
+model Warehouse {
+  id             String          @id @default(cuid())
+  organizationId String
+  name           String
+  code           String          // e.g. "WH-MAIN", unique per organization
+  address        String?
+  contactPhone   String?
+  contactEmail   String?
+  isArchived     Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  locations      StockLocation[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, isArchived])
+}
+
+model StockLocation {
+  id                String          @id @default(cuid())
+  organizationId    String
+  warehouseId       String
+  name              String          // e.g. "Aisle 1 - Bay A", "Cold Storage", "General Storage"
+  code              String          // e.g. "A1-BA", unique per warehouse
+  description       String?
+  isArchived        Boolean         @default(false)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  organization      Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  warehouse         Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  balances          StockBalance[]
+  outgoingMovements StockMovement[] @relation("SourceLocation")
+  incomingMovements StockMovement[] @relation("DestinationLocation")
+
+  @@unique([warehouseId, code])
+  @@index([organizationId, warehouseId, isArchived])
+}
+
+model StockMovement {
+  id              String         @id @default(cuid())
+  organizationId  String
+  productId       String
+  movementNumber  String         // e.g. "MOV-2026-0001"
+  type            String         // INCOMING, OUTGOING, TRANSFER, ADJUSTMENT
+  quantity        Float          // Strictly positive quantity of units moved
+  fromLocationId  String?
+  toLocationId    String?
+  referenceNumber String?        // e.g. PO reference, SO reference, Physical Audit ID
+  reason          String?
+  userId          String
+  createdAt       DateTime       @default(now())
+
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product         Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  fromLocation    StockLocation? @relation("SourceLocation", fields: [fromLocationId], references: [id], onDelete: SetNull)
+  toLocation      StockLocation? @relation("DestinationLocation", fields: [toLocationId], references: [id], onDelete: SetNull)
+  user            User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, productId])
+  @@index([organizationId, type])
+  @@index([createdAt])
+}
+
+model StockBalance {
+  id             String        @id @default(cuid())
+  organizationId String
+  productId      String
+  locationId     String
+  quantity       Float         @default(0)
+  updatedAt      DateTime      @updatedAt
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product        Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  location       StockLocation @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, productId, locationId])
+  @@index([organizationId, productId])
+  @@index([locationId])
 }
 
 // -----------------------------------------------------------------------------

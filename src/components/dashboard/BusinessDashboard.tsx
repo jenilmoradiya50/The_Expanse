@@ -19,6 +19,11 @@ import {
   Package,
   Layers,
   FileSpreadsheet,
+  Warehouse as WarehouseIcon,
+  MapPin,
+  ArrowRightLeft,
+  Boxes,
+  History,
 } from "lucide-react";
 import {
   createCustomerAction,
@@ -29,6 +34,11 @@ import {
   archiveProductAction,
   createInvoiceAction,
   recordPaymentAction,
+  createWarehouseAction,
+  archiveWarehouseAction,
+  createStockLocationAction,
+  archiveStockLocationAction,
+  recordStockMovementAction,
 } from "@/lib/actions";
 
 interface BusinessDashboardProps {
@@ -63,6 +73,10 @@ interface BusinessDashboardProps {
       customersCount: number;
       vendorsCount: number;
       productsCount: number;
+      warehousesCount?: number;
+      stockLocationsCount?: number;
+      totalInventoryUnits?: number;
+      totalInventoryValuation?: number;
       isDemoDataNotice: string;
     };
     lists: {
@@ -97,6 +111,56 @@ interface BusinessDashboardProps {
         hsnSacCode: string;
         gstRate: number;
         isActive: boolean;
+        trackInventory?: boolean;
+        currentStock?: number;
+      }>;
+      warehouses?: Array<{
+        id: string;
+        name: string;
+        code: string;
+        address?: string | null;
+        contactPhone?: string | null;
+        contactEmail?: string | null;
+        locationsCount: number;
+      }>;
+      stockLocations?: Array<{
+        id: string;
+        name: string;
+        code: string;
+        description?: string | null;
+        warehouseId: string;
+        warehouseName: string;
+        warehouseCode: string;
+      }>;
+      stockBalances?: Array<{
+        id: string;
+        productId: string;
+        productName: string;
+        productSku?: string | null;
+        productUnit: string;
+        locationId: string;
+        locationName: string;
+        locationCode: string;
+        warehouseName: string;
+        warehouseCode: string;
+        quantity: number;
+        valuation: number;
+      }>;
+      stockMovements?: Array<{
+        id: string;
+        movementNumber: string;
+        type: string;
+        productId: string;
+        productName: string;
+        productSku?: string | null;
+        productUnit: string;
+        quantity: number;
+        fromLocation?: string | null;
+        toLocation?: string | null;
+        referenceNumber?: string | null;
+        reason?: string | null;
+        userName: string;
+        createdAt: string;
       }>;
       orders: Array<{
         id: string;
@@ -186,6 +250,7 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
     purchasePrice: 600,
     hsnSacCode: "8471",
     gstRate: 18,
+    trackInventory: true,
   });
 
   const [invoiceForm, setInvoiceForm] = useState({
@@ -207,6 +272,50 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
     paymentMode: "BANK_TRANSFER",
     referenceNumber: "UTR-REF-001",
   });
+
+  // Inventory Sub-Tab & Forms
+  const [inventoryTab, setInventoryTab] = useState<"overview" | "warehouses" | "movements">("overview");
+
+  const [warehouseForm, setWarehouseForm] = useState({
+    name: "",
+    code: "",
+    address: "",
+    contactPhone: "",
+    contactEmail: "",
+  });
+
+  const [locationForm, setLocationForm] = useState({
+    warehouseId: lists.warehouses?.[0]?.id || "",
+    name: "",
+    code: "",
+    description: "",
+  });
+
+  const [movementForm, setMovementForm] = useState({
+    productId: lists.products?.find((p) => p.trackInventory !== false)?.id || "",
+    type: "INCOMING" as "INCOMING" | "OUTGOING" | "TRANSFER" | "ADJUSTMENT",
+    sourceLocationId: lists.stockLocations?.[0]?.id || "",
+    destinationLocationId: lists.stockLocations?.[0]?.id || "",
+    quantity: 1,
+    referenceNumber: "",
+    reason: "",
+  });
+
+  const getProductStock = (productId: string) => {
+    return (
+      lists.stockBalances
+        ?.filter((b) => b.productId === productId)
+        .reduce((sum, b) => sum + b.quantity, 0) ?? 0
+    );
+  };
+
+  const getLocationStock = (productId: string, locationId: string) => {
+    return (
+      lists.stockBalances?.find(
+        (b) => b.productId === productId && b.locationId === locationId
+      )?.quantity ?? 0
+    );
+  };
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat("en-IN", {
@@ -303,6 +412,97 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
         setModalType(null);
       } catch (err: unknown) {
         setFormError(err instanceof Error ? err.message : "Failed to record payment");
+      }
+    });
+  };
+
+  const handleCreateWarehouse = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        await createWarehouseAction(organization.id, warehouseForm);
+        setModalType(null);
+        setWarehouseForm({ name: "", code: "", address: "", contactPhone: "", contactEmail: "" });
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to create warehouse");
+      }
+    });
+  };
+
+  const handleArchiveWarehouse = (warehouseId: string) => {
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        await archiveWarehouseAction(organization.id, warehouseId);
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to archive warehouse");
+      }
+    });
+  };
+
+  const handleCreateStockLocation = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        await createStockLocationAction(organization.id, locationForm);
+        setModalType(null);
+        setLocationForm({ warehouseId: lists.warehouses?.[0]?.id || "", name: "", code: "", description: "" });
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to create stock location");
+      }
+    });
+  };
+
+  const handleArchiveStockLocation = (locationId: string) => {
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        await archiveStockLocationAction(organization.id, locationId);
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to archive location");
+      }
+    });
+  };
+
+  const handleRecordStockMovement = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        const isNegativeAdjustment = movementForm.type === "ADJUSTMENT" && Number(movementForm.quantity) < 0;
+        await recordStockMovementAction(organization.id, {
+          productId: movementForm.productId,
+          type: movementForm.type,
+          fromLocationId:
+            movementForm.type === "OUTGOING" || movementForm.type === "TRANSFER"
+              ? movementForm.sourceLocationId
+              : isNegativeAdjustment
+              ? movementForm.sourceLocationId
+              : undefined,
+          toLocationId:
+            movementForm.type === "INCOMING" || movementForm.type === "TRANSFER"
+              ? movementForm.destinationLocationId
+              : movementForm.type === "ADJUSTMENT" && !isNegativeAdjustment
+              ? movementForm.sourceLocationId
+              : undefined,
+          quantity: Math.abs(Number(movementForm.quantity)),
+          referenceNumber: movementForm.referenceNumber || undefined,
+          reason: movementForm.reason || undefined,
+        });
+        setModalType(null);
+        setMovementForm({
+          productId: lists.products?.find((p) => p.trackInventory !== false)?.id || "",
+          type: "INCOMING",
+          sourceLocationId: lists.stockLocations?.[0]?.id || "",
+          destinationLocationId: lists.stockLocations?.[0]?.id || "",
+          quantity: 1,
+          referenceNumber: "",
+          reason: "",
+        });
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to record stock movement");
       }
     });
   };
@@ -503,13 +703,56 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
             )}
 
             {activeSection === "inventory" && (
-              <button
-                onClick={() => setModalType("product")}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Add Product/Service
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => {
+                    const firstTracked = lists.products.find((p) => p.trackInventory !== false);
+                    setMovementForm({
+                      productId: firstTracked?.id || "",
+                      type: "INCOMING",
+                      sourceLocationId: lists.stockLocations?.[0]?.id || "",
+                      destinationLocationId: lists.stockLocations?.[0]?.id || "",
+                      quantity: 1,
+                      referenceNumber: "",
+                      reason: "",
+                    });
+                    setModalType("stock_movement");
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                  Record Movement
+                </button>
+                <button
+                  onClick={() => setModalType("warehouse")}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-zinc-700"
+                >
+                  <WarehouseIcon className="w-3.5 h-3.5 text-zinc-400" />
+                  Add Warehouse
+                </button>
+                <button
+                  onClick={() => {
+                    setLocationForm({
+                      warehouseId: lists.warehouses?.[0]?.id || "",
+                      name: "",
+                      code: "",
+                      description: "",
+                    });
+                    setModalType("stock_location");
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-zinc-700"
+                >
+                  <MapPin className="w-3.5 h-3.5 text-zinc-400" />
+                  Add Location
+                </button>
+                <button
+                  onClick={() => setModalType("product")}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add Product
+                </button>
+              </div>
             )}
 
             {(activeSection === "invoices" || activeSection === "expenses") && (
@@ -694,58 +937,455 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
           </div>
         )}
 
-        {/* 4. INVENTORY / PRODUCTS & SERVICES */}
+        {/* 4. INVENTORY / WAREHOUSES & STOCK MANAGEMENT */}
         {activeSection === "inventory" && (
-          <div className="space-y-4">
-            {lists.products.length === 0 ? (
-              <div className="text-center py-8 text-xs text-zinc-500">
-                <Package className="w-8 h-8 text-zinc-600 mx-auto mb-2" />
-                No products or services registered yet. Click &quot;Add Product/Service&quot; to register catalog items.
+          <div className="space-y-6">
+            {/* Inventory Metric Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/60 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center shrink-0">
+                  <WarehouseIcon className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-zinc-500 text-[10px] uppercase font-semibold block">Warehouses</span>
+                  <span className="text-xl font-bold text-white">
+                    {metrics.warehousesCount ?? lists.warehouses?.length ?? 0}
+                  </span>
+                </div>
               </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-zinc-950 text-zinc-400 uppercase tracking-wider text-[10px] border-b border-zinc-800">
-                    <tr>
-                      <th className="py-2.5 px-3">Item Name</th>
-                      <th className="py-2.5 px-3">SKU</th>
-                      <th className="py-2.5 px-3">Type</th>
-                      <th className="py-2.5 px-3">HSN/SAC</th>
-                      <th className="py-2.5 px-3">GST Rate</th>
-                      <th className="py-2.5 px-3">Selling Price</th>
-                      <th className="py-2.5 px-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-800/60">
-                    {lists.products.map((p) => (
-                      <tr key={p.id} className="hover:bg-zinc-800/30">
-                        <td className="py-3 px-3 font-medium text-white">{p.name}</td>
-                        <td className="py-3 px-3 font-mono text-zinc-400">{p.sku || "—"}</td>
-                        <td className="py-3 px-3">
-                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-300">
-                            {p.type}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 font-mono text-zinc-300">{p.hsnSacCode}</td>
-                        <td className="py-3 px-3 text-zinc-300">{p.gstRate}%</td>
-                        <td className="py-3 px-3 font-semibold text-emerald-400">{formatCurrency(p.sellingPrice)}</td>
-                        <td className="py-3 px-3 text-right">
-                          <button
-                            onClick={() => {
-                              startTransition(async () => {
-                                await archiveProductAction(organization.id, p.id);
-                              });
-                            }}
-                            className="text-zinc-500 hover:text-red-400 p-1 rounded"
-                            title="Archive Product"
-                          >
-                            <Archive className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+
+              <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/60 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-sky-500/10 text-sky-400 flex items-center justify-center shrink-0">
+                  <MapPin className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-zinc-500 text-[10px] uppercase font-semibold block">Locations / Bins</span>
+                  <span className="text-xl font-bold text-white">
+                    {metrics.stockLocationsCount ?? lists.stockLocations?.length ?? 0}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/60 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0">
+                  <Boxes className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-zinc-500 text-[10px] uppercase font-semibold block">Units On Hand</span>
+                  <span className="text-xl font-bold text-emerald-400">
+                    {(metrics.totalInventoryUnits ?? 0).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/60 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-zinc-500 text-[10px] uppercase font-semibold block">Inventory Valuation</span>
+                  <span className="text-xl font-bold text-amber-300">
+                    {formatCurrency(metrics.totalInventoryValuation ?? 0)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Sub-Tabs Bar */}
+            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 text-xs">
+              <button
+                onClick={() => setInventoryTab("overview")}
+                className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-2 transition-colors ${
+                  inventoryTab === "overview"
+                    ? "bg-zinc-800 text-white"
+                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                }`}
+              >
+                <Boxes className="w-3.5 h-3.5 text-emerald-400" />
+                Products & Stock Overview
+              </button>
+              <button
+                onClick={() => setInventoryTab("warehouses")}
+                className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-2 transition-colors ${
+                  inventoryTab === "warehouses"
+                    ? "bg-zinc-800 text-white"
+                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                }`}
+              >
+                <WarehouseIcon className="w-3.5 h-3.5 text-indigo-400" />
+                Warehouses & Locations ({lists.warehouses?.length ?? 0})
+              </button>
+              <button
+                onClick={() => setInventoryTab("movements")}
+                className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-2 transition-colors ${
+                  inventoryTab === "movements"
+                    ? "bg-zinc-800 text-white"
+                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                }`}
+              >
+                <History className="w-3.5 h-3.5 text-amber-400" />
+                Stock Movement Ledger ({lists.stockMovements?.length ?? 0})
+              </button>
+            </div>
+
+            {/* SUB-VIEW 1: PRODUCTS & STOCK OVERVIEW */}
+            {inventoryTab === "overview" && (
+              <div className="space-y-4">
+                {lists.products.length === 0 ? (
+                  <div className="text-center py-10 text-xs text-zinc-500 border border-dashed border-zinc-800 rounded-xl">
+                    <Package className="w-8 h-8 text-zinc-600 mx-auto mb-2" />
+                    No products or services registered yet. Click &quot;Add Product&quot; to register catalog items.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-zinc-950 text-zinc-400 uppercase tracking-wider text-[10px] border-b border-zinc-800">
+                        <tr>
+                          <th className="py-2.5 px-3">Item Name</th>
+                          <th className="py-2.5 px-3">SKU</th>
+                          <th className="py-2.5 px-3">Type</th>
+                          <th className="py-2.5 px-3">Inventory Tracking</th>
+                          <th className="py-2.5 px-3 text-right">Units On Hand</th>
+                          <th className="py-2.5 px-3 text-right">Unit Cost</th>
+                          <th className="py-2.5 px-3 text-right">Selling Price</th>
+                          <th className="py-2.5 px-3 text-right">Total Valuation</th>
+                          <th className="py-2.5 px-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-800/60">
+                        {lists.products.map((p) => {
+                          const stockUnits = getProductStock(p.id);
+                          const totalVal = stockUnits * p.purchasePrice;
+                          const isTracked = p.trackInventory !== false;
+
+                          return (
+                            <tr key={p.id} className="hover:bg-zinc-800/30">
+                              <td className="py-3 px-3 font-medium text-white">
+                                {p.name}
+                                <span className="block text-[10px] text-zinc-500 font-mono">
+                                  HSN: {p.hsnSacCode} | GST: {p.gstRate}%
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 font-mono text-zinc-400">{p.sku || "—"}</td>
+                              <td className="py-3 px-3">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-300">
+                                  {p.type}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3">
+                                {isTracked ? (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 font-medium">
+                                    Tracked
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400">
+                                    Non-inventory
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-bold">
+                                {isTracked ? (
+                                  <span className={stockUnits > 0 ? "text-emerald-400" : "text-amber-400"}>
+                                    {stockUnits} {p.unit}
+                                  </span>
+                                ) : (
+                                  <span className="text-zinc-600">—</span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 text-right text-zinc-300">{formatCurrency(p.purchasePrice)}</td>
+                              <td className="py-3 px-3 text-right font-semibold text-emerald-400">
+                                {formatCurrency(p.sellingPrice)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-semibold text-amber-300">
+                                {isTracked ? formatCurrency(totalVal) : "—"}
+                              </td>
+                              <td className="py-3 px-3 text-right space-x-1">
+                                {isTracked && (
+                                  <button
+                                    onClick={() => {
+                                      setMovementForm({
+                                        productId: p.id,
+                                        type: "INCOMING",
+                                        sourceLocationId: lists.stockLocations?.[0]?.id || "",
+                                        destinationLocationId: lists.stockLocations?.[0]?.id || "",
+                                        quantity: 1,
+                                        referenceNumber: "",
+                                        reason: "",
+                                      });
+                                      setModalType("stock_movement");
+                                    }}
+                                    className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-medium transition-colors"
+                                    title="Move / Adjust Stock"
+                                  >
+                                    Move Stock
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => {
+                                    startTransition(async () => {
+                                      await archiveProductAction(organization.id, p.id);
+                                    });
+                                  }}
+                                  className="text-zinc-500 hover:text-red-400 p-1 rounded inline-block"
+                                  title="Archive Item"
+                                >
+                                  <Archive className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* SUB-VIEW 2: WAREHOUSES & LOCATIONS */}
+            {inventoryTab === "warehouses" && (
+              <div className="space-y-4">
+                {(!lists.warehouses || lists.warehouses.length === 0) ? (
+                  <div className="text-center py-10 text-xs text-zinc-500 border border-dashed border-zinc-800 rounded-xl space-y-3">
+                    <WarehouseIcon className="w-8 h-8 text-zinc-600 mx-auto" />
+                    <p>No warehouses registered yet.</p>
+                    <button
+                      onClick={() => setModalType("warehouse")}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
+                    >
+                      Create First Warehouse
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {lists.warehouses.map((w) => {
+                      const warehouseLocations = lists.stockLocations?.filter((l) => l.warehouseId === w.id) || [];
+
+                      return (
+                        <div
+                          key={w.id}
+                          className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 space-y-3"
+                        >
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-sm font-bold text-white">{w.name}</h4>
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                                  {w.code}
+                                </span>
+                              </div>
+                              {w.address && (
+                                <p className="text-xs text-zinc-400 mt-1 flex items-center gap-1">
+                                  <MapPin className="w-3 h-3 text-zinc-500 shrink-0" />
+                                  {w.address}
+                                </p>
+                              )}
+                              {(w.contactPhone || w.contactEmail) && (
+                                <p className="text-[11px] text-zinc-500 mt-0.5">
+                                  {[w.contactPhone, w.contactEmail].filter(Boolean).join(" • ")}
+                                </p>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => handleArchiveWarehouse(w.id)}
+                              className="text-zinc-500 hover:text-red-400 p-1 rounded"
+                              title="Archive Warehouse"
+                            >
+                              <Archive className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          {/* Nested Locations */}
+                          <div className="pt-2 border-t border-zinc-800/80">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                                Storage Locations ({warehouseLocations.length})
+                              </span>
+                              <button
+                                onClick={() => {
+                                  setLocationForm({
+                                    warehouseId: w.id,
+                                    name: "",
+                                    code: "",
+                                    description: "",
+                                  });
+                                  setModalType("stock_location");
+                                }}
+                                className="text-[10px] text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1"
+                              >
+                                <Plus className="w-3 h-3" />
+                                Add Location
+                              </button>
+                            </div>
+
+                            {warehouseLocations.length === 0 ? (
+                              <p className="text-[11px] text-zinc-500 italic py-2">
+                                No storage racks or bins defined yet in this warehouse.
+                              </p>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {warehouseLocations.map((loc) => {
+                                  const totalLocUnits = lists.stockBalances
+                                    ?.filter((b) => b.locationId === loc.id)
+                                    .reduce((acc, b) => acc + b.quantity, 0) ?? 0;
+
+                                  return (
+                                    <div
+                                      key={loc.id}
+                                      className="p-2 rounded-lg bg-zinc-950/60 border border-zinc-800/60 flex items-center justify-between text-xs"
+                                    >
+                                      <div>
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-medium text-zinc-200">{loc.name}</span>
+                                          <span className="px-1.5 py-0.2 rounded font-mono text-[10px] bg-zinc-800 text-zinc-400">
+                                            {loc.code}
+                                          </span>
+                                        </div>
+                                        {loc.description && (
+                                          <span className="text-[10px] text-zinc-500 block">{loc.description}</span>
+                                        )}
+                                      </div>
+                                      <div className="flex items-center gap-3">
+                                        <span className="font-mono text-[11px] text-emerald-400">
+                                          {totalLocUnits} units
+                                        </span>
+                                        <button
+                                          onClick={() => handleArchiveStockLocation(loc.id)}
+                                          className="text-zinc-600 hover:text-red-400"
+                                          title="Archive Location"
+                                        >
+                                          <Archive className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* SUB-VIEW 3: STOCK MOVEMENT LEDGER */}
+            {inventoryTab === "movements" && (
+              <div className="space-y-4">
+                {(!lists.stockMovements || lists.stockMovements.length === 0) ? (
+                  <div className="text-center py-10 text-xs text-zinc-500 border border-dashed border-zinc-800 rounded-xl space-y-3">
+                    <History className="w-8 h-8 text-zinc-600 mx-auto" />
+                    <p>No stock movements recorded yet.</p>
+                    <button
+                      onClick={() => {
+                        const firstTracked = lists.products.find((p) => p.trackInventory !== false);
+                        setMovementForm({
+                          productId: firstTracked?.id || "",
+                          type: "INCOMING",
+                          sourceLocationId: lists.stockLocations?.[0]?.id || "",
+                          destinationLocationId: lists.stockLocations?.[0]?.id || "",
+                          quantity: 1,
+                          referenceNumber: "",
+                          reason: "",
+                        });
+                        setModalType("stock_movement");
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
+                    >
+                      Record First Stock Movement
+                    </button>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-zinc-950 text-zinc-400 uppercase tracking-wider text-[10px] border-b border-zinc-800">
+                        <tr>
+                          <th className="py-2.5 px-3">Movement #</th>
+                          <th className="py-2.5 px-3">Timestamp</th>
+                          <th className="py-2.5 px-3">Product</th>
+                          <th className="py-2.5 px-3">Type</th>
+                          <th className="py-2.5 px-3 text-right">Quantity</th>
+                          <th className="py-2.5 px-3">Source / Destination</th>
+                          <th className="py-2.5 px-3">Reference / Reason</th>
+                          <th className="py-2.5 px-3">User</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-800/60">
+                        {lists.stockMovements.map((m) => {
+                          const typeBadgeClasses =
+                            m.type === "INCOMING"
+                              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                              : m.type === "OUTGOING"
+                              ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                              : m.type === "TRANSFER"
+                              ? "bg-sky-500/10 text-sky-400 border-sky-500/20"
+                              : "bg-purple-500/10 text-purple-400 border-purple-500/20";
+
+                          return (
+                            <tr key={m.id} className="hover:bg-zinc-800/30">
+                              <td className="py-3 px-3 font-mono font-medium text-white">{m.movementNumber}</td>
+                              <td className="py-3 px-3 text-zinc-400 text-[11px] whitespace-nowrap">
+                                {new Date(m.createdAt).toLocaleString("en-IN", {
+                                  dateStyle: "medium",
+                                  timeStyle: "short",
+                                })}
+                              </td>
+                              <td className="py-3 px-3">
+                                <span className="font-medium text-zinc-200 block">{m.productName}</span>
+                                {m.productSku && (
+                                  <span className="font-mono text-[10px] text-zinc-500">{m.productSku}</span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${typeBadgeClasses}`}
+                                >
+                                  {m.type}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-bold">
+                                {m.type === "INCOMING" && (
+                                  <span className="text-emerald-400">+{m.quantity} {m.productUnit}</span>
+                                )}
+                                {m.type === "OUTGOING" && (
+                                  <span className="text-rose-400">-{m.quantity} {m.productUnit}</span>
+                                )}
+                                {m.type === "TRANSFER" && (
+                                  <span className="text-sky-400">{m.quantity} {m.productUnit}</span>
+                                )}
+                                {m.type === "ADJUSTMENT" && (
+                                  <span className={m.quantity >= 0 ? "text-purple-400" : "text-rose-400"}>
+                                    {m.quantity >= 0 ? `+${m.quantity}` : m.quantity} {m.productUnit}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 text-zinc-300 font-mono text-[11px]">
+                                {m.type === "INCOMING" && <span>To: {m.toLocation || "—"}</span>}
+                                {m.type === "OUTGOING" && <span>From: {m.fromLocation || "—"}</span>}
+                                {m.type === "TRANSFER" && (
+                                  <span>
+                                    {m.fromLocation} → {m.toLocation}
+                                  </span>
+                                )}
+                                {m.type === "ADJUSTMENT" && <span>At: {m.toLocation || m.fromLocation || "—"}</span>}
+                              </td>
+                              <td className="py-3 px-3 text-zinc-400 text-[11px]">
+                                {m.referenceNumber && (
+                                  <span className="font-mono text-zinc-300 block">{m.referenceNumber}</span>
+                                )}
+                                {m.reason && <span className="italic text-zinc-500">{m.reason}</span>}
+                                {!m.referenceNumber && !m.reason && "—"}
+                              </td>
+                              <td className="py-3 px-3 text-zinc-400 text-[11px] whitespace-nowrap">{m.userName}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -934,6 +1574,9 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
                 {modalType === "product" && "Add Product / Service"}
                 {modalType === "invoice" && "Create Invoice / Bill"}
                 {modalType === "payment" && "Record Payment Receipt"}
+                {modalType === "warehouse" && "Add New Warehouse"}
+                {modalType === "stock_location" && "Add Stock Location"}
+                {modalType === "stock_movement" && "Record Stock Movement"}
               </h3>
               <button
                 onClick={() => setModalType(null)}
@@ -1100,6 +1743,26 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
                     />
                   </div>
                   <div>
+                    <label className="text-zinc-400 block mb-1">Unit</label>
+                    <input
+                      value={productForm.unit}
+                      onChange={(e) => setProductForm({ ...productForm, unit: e.target.value.toUpperCase() })}
+                      placeholder="NOS / PCS / KG"
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Cost Price (₹)</label>
+                    <input
+                      type="number"
+                      value={productForm.purchasePrice}
+                      onChange={(e) => setProductForm({ ...productForm, purchasePrice: Number(e.target.value) })}
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                    />
+                  </div>
+                  <div>
                     <label className="text-zinc-400 block mb-1">Selling Price (₹)</label>
                     <input
                       type="number"
@@ -1108,6 +1771,18 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
                       className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
                     />
                   </div>
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="checkbox"
+                    id="trackInventory"
+                    checked={productForm.trackInventory}
+                    onChange={(e) => setProductForm({ ...productForm, trackInventory: e.target.checked })}
+                    className="rounded bg-zinc-950 border-zinc-800 text-emerald-500 focus:ring-0"
+                  />
+                  <label htmlFor="trackInventory" className="text-zinc-300 cursor-pointer">
+                    Track Inventory (Movements & Ledger Balances)
+                  </label>
                 </div>
                 <button
                   type="submit"
@@ -1276,6 +1951,326 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
                   className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-semibold text-white transition-colors"
                 >
                   {isPending ? "Recording..." : "Record Payment & Settle Balance"}
+                </button>
+              </form>
+            )}
+
+            {/* WAREHOUSE FORM */}
+            {modalType === "warehouse" && (
+              <form onSubmit={handleCreateWarehouse} className="space-y-3 text-xs">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Warehouse Name *</label>
+                    <input
+                      required
+                      value={warehouseForm.name}
+                      onChange={(e) => setWarehouseForm({ ...warehouseForm, name: e.target.value })}
+                      placeholder="e.g. Central Warehouse Mumbai"
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Warehouse Code *</label>
+                    <input
+                      required
+                      value={warehouseForm.code}
+                      onChange={(e) => setWarehouseForm({ ...warehouseForm, code: e.target.value.toUpperCase() })}
+                      placeholder="e.g. WH-BOM-01"
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-zinc-400 block mb-1">Facility Address</label>
+                  <input
+                    value={warehouseForm.address}
+                    onChange={(e) => setWarehouseForm({ ...warehouseForm, address: e.target.value })}
+                    placeholder="Plot 42, Logistics Park, Bhiwandi"
+                    className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Contact Phone</label>
+                    <input
+                      value={warehouseForm.contactPhone}
+                      onChange={(e) => setWarehouseForm({ ...warehouseForm, contactPhone: e.target.value })}
+                      placeholder="+91 98200 12345"
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Contact Email</label>
+                    <input
+                      type="email"
+                      value={warehouseForm.contactEmail}
+                      onChange={(e) => setWarehouseForm({ ...warehouseForm, contactEmail: e.target.value })}
+                      placeholder="warehouse@company.com"
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={isPending}
+                  className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-semibold text-white transition-colors"
+                >
+                  {isPending ? "Creating..." : "Save Warehouse"}
+                </button>
+              </form>
+            )}
+
+            {/* STOCK LOCATION FORM */}
+            {modalType === "stock_location" && (
+              <form onSubmit={handleCreateStockLocation} className="space-y-3 text-xs">
+                <div>
+                  <label className="text-zinc-400 block mb-1">Parent Warehouse *</label>
+                  <select
+                    required
+                    value={locationForm.warehouseId}
+                    onChange={(e) => setLocationForm({ ...locationForm, warehouseId: e.target.value })}
+                    className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                  >
+                    <option value="" disabled>Select Warehouse</option>
+                    {lists.warehouses?.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name} ({w.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Location Name *</label>
+                    <input
+                      required
+                      value={locationForm.name}
+                      onChange={(e) => setLocationForm({ ...locationForm, name: e.target.value })}
+                      placeholder="e.g. Aisle 1 Rack B"
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Location Code *</label>
+                    <input
+                      required
+                      value={locationForm.code}
+                      onChange={(e) => setLocationForm({ ...locationForm, code: e.target.value.toUpperCase() })}
+                      placeholder="e.g. LOC-A1-B"
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-zinc-400 block mb-1">Description / Notes</label>
+                  <input
+                    value={locationForm.description}
+                    onChange={(e) => setLocationForm({ ...locationForm, description: e.target.value })}
+                    placeholder="Temperature controlled storage bin"
+                    className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={isPending || !lists.warehouses?.length}
+                  className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-semibold text-white transition-colors disabled:opacity-50"
+                >
+                  {isPending ? "Creating..." : "Save Stock Location"}
+                </button>
+              </form>
+            )}
+
+            {/* STOCK MOVEMENT FORM */}
+            {modalType === "stock_movement" && (
+              <form onSubmit={handleRecordStockMovement} className="space-y-3 text-xs">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Movement Type</label>
+                    <select
+                      value={movementForm.type}
+                      onChange={(e) => {
+                        const newType = e.target.value as "INCOMING" | "OUTGOING" | "TRANSFER" | "ADJUSTMENT";
+                        setMovementForm({ ...movementForm, type: newType });
+                      }}
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-medium"
+                    >
+                      <option value="INCOMING">INCOMING (Goods Receipt / Inflow)</option>
+                      <option value="OUTGOING">OUTGOING (Stock Issue / Dispatch)</option>
+                      <option value="TRANSFER">TRANSFER (Inter-Location Transfer)</option>
+                      <option value="ADJUSTMENT">ADJUSTMENT (Count Reconciliation)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Product Item *</label>
+                    <select
+                      required
+                      value={movementForm.productId}
+                      onChange={(e) => setMovementForm({ ...movementForm, productId: e.target.value })}
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                    >
+                      <option value="" disabled>Select Item</option>
+                      {lists.products
+                        .filter((p) => p.trackInventory !== false)
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} {p.sku ? `(${p.sku})` : ""} - On Hand: {getProductStock(p.id)} {p.unit}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Location Selection based on Type */}
+                {movementForm.type === "INCOMING" && (
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Destination Storage Location *</label>
+                    <select
+                      required
+                      value={movementForm.destinationLocationId}
+                      onChange={(e) => setMovementForm({ ...movementForm, destinationLocationId: e.target.value })}
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono"
+                    >
+                      <option value="" disabled>Select Storage Location</option>
+                      {lists.stockLocations?.map((loc) => (
+                        <option key={loc.id} value={loc.id}>
+                          {loc.warehouseName} → {loc.name} ({loc.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {movementForm.type === "OUTGOING" && (
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Source Storage Location *</label>
+                    <select
+                      required
+                      value={movementForm.sourceLocationId}
+                      onChange={(e) => setMovementForm({ ...movementForm, sourceLocationId: e.target.value })}
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono"
+                    >
+                      <option value="" disabled>Select Source Location</option>
+                      {lists.stockLocations?.map((loc) => {
+                        const stockAtLoc = getLocationStock(movementForm.productId, loc.id);
+                        return (
+                          <option key={loc.id} value={loc.id}>
+                            {loc.warehouseName} → {loc.name} ({loc.code}) [Available: {stockAtLoc}]
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {movementForm.sourceLocationId && (
+                      <span className="text-[11px] text-zinc-400 mt-1 block">
+                        Available at selected location:{" "}
+                        <strong className="text-amber-400">
+                          {getLocationStock(movementForm.productId, movementForm.sourceLocationId)}
+                        </strong>{" "}
+                        units
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {movementForm.type === "TRANSFER" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-zinc-400 block mb-1">Source Location *</label>
+                      <select
+                        required
+                        value={movementForm.sourceLocationId}
+                        onChange={(e) => setMovementForm({ ...movementForm, sourceLocationId: e.target.value })}
+                        className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono text-[11px]"
+                      >
+                        <option value="" disabled>Select Source</option>
+                        {lists.stockLocations?.map((loc) => (
+                          <option key={loc.id} value={loc.id}>
+                            {loc.name} ({loc.code}) [Avail: {getLocationStock(movementForm.productId, loc.id)}]
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-zinc-400 block mb-1">Destination Location *</label>
+                      <select
+                        required
+                        value={movementForm.destinationLocationId}
+                        onChange={(e) => setMovementForm({ ...movementForm, destinationLocationId: e.target.value })}
+                        className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono text-[11px]"
+                      >
+                        <option value="" disabled>Select Destination</option>
+                        {lists.stockLocations?.map((loc) => (
+                          <option key={loc.id} value={loc.id} disabled={loc.id === movementForm.sourceLocationId}>
+                            {loc.name} ({loc.code})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {movementForm.type === "ADJUSTMENT" && (
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Target Storage Location *</label>
+                    <select
+                      required
+                      value={movementForm.sourceLocationId}
+                      onChange={(e) => setMovementForm({ ...movementForm, sourceLocationId: e.target.value })}
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono"
+                    >
+                      <option value="" disabled>Select Location</option>
+                      {lists.stockLocations?.map((loc) => (
+                        <option key={loc.id} value={loc.id}>
+                          {loc.warehouseName} → {loc.name} ({loc.code}) [Current: {getLocationStock(movementForm.productId, loc.id)}]
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-zinc-400 block mb-1">
+                      {movementForm.type === "ADJUSTMENT" ? "Adjustment Delta (+ / -)" : "Quantity *"}
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      required
+                      value={movementForm.quantity}
+                      onChange={(e) => setMovementForm({ ...movementForm, quantity: Number(e.target.value) })}
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Reference Number</label>
+                    <input
+                      value={movementForm.referenceNumber}
+                      onChange={(e) => setMovementForm({ ...movementForm, referenceNumber: e.target.value })}
+                      placeholder="e.g. PO-8821 / DC-09"
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-zinc-400 block mb-1">
+                    {movementForm.type === "ADJUSTMENT" ? "Reason for Adjustment * (Required for Audit)" : "Notes / Purpose"}
+                  </label>
+                  <input
+                    required={movementForm.type === "ADJUSTMENT"}
+                    value={movementForm.reason}
+                    onChange={(e) => setMovementForm({ ...movementForm, reason: e.target.value })}
+                    placeholder={movementForm.type === "ADJUSTMENT" ? "e.g. Annual physical inventory count discrepancy" : "e.g. Initial warehouse stocking"}
+                    className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isPending || !movementForm.productId || (movementForm.type !== "ADJUSTMENT" && movementForm.quantity <= 0)}
+                  className="w-full py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 font-semibold text-white transition-colors disabled:opacity-50"
+                >
+                  {isPending ? "Executing Transaction..." : "Record Movement & Update Balances"}
                 </button>
               </form>
             )}

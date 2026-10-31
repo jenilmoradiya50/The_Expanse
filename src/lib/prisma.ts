@@ -6,7 +6,13 @@ import { PrismaClient } from "@prisma/client";
  * 2. Consistent query logging across environments.
  */
 function createPrismaClient() {
+  const isTest = process.env.NODE_ENV === "test";
+  const datasourceUrl = isTest
+    ? (process.env.TEST_DATABASE_URL || "file:./test.db")
+    : process.env.DATABASE_URL;
+
   const baseClient = new PrismaClient({
+    ...(datasourceUrl ? { datasources: { db: { url: datasourceUrl } } } : {}),
     log:
       process.env.NODE_ENV === "development"
         ? ["query", "error", "warn"]

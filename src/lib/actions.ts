@@ -25,6 +25,16 @@ import {
   type InvoiceInput,
   type PaymentInput,
 } from "./business";
+import {
+  createWarehouse,
+  archiveWarehouse,
+  createStockLocation,
+  archiveStockLocation,
+  recordStockMovement,
+  type WarehouseInput,
+  type StockLocationInput,
+  type StockMovementInput,
+} from "./inventory";
 import { AuditAction, AuditEntity } from "@/types";
 import Decimal from "decimal.js";
 
@@ -155,6 +165,45 @@ export async function reconcileVendorBalanceAction(
 }
 
 // =============================================================================
+// PHASE 5.1 SERVER ACTIONS FOR INVENTORY & WAREHOUSE
+// =============================================================================
+
+export async function createWarehouseAction(organizationId: string, data: WarehouseInput) {
+  const user = await getAuthenticatedUser();
+  const warehouse = await createWarehouse(user.id, organizationId, data);
+  revalidatePath("/");
+  return warehouse;
+}
+
+export async function archiveWarehouseAction(organizationId: string, warehouseId: string) {
+  const user = await getAuthenticatedUser();
+  const res = await archiveWarehouse(user.id, organizationId, warehouseId);
+  revalidatePath("/");
+  return res;
+}
+
+export async function createStockLocationAction(organizationId: string, data: StockLocationInput) {
+  const user = await getAuthenticatedUser();
+  const location = await createStockLocation(user.id, organizationId, data);
+  revalidatePath("/");
+  return location;
+}
+
+export async function archiveStockLocationAction(organizationId: string, locationId: string) {
+  const user = await getAuthenticatedUser();
+  const res = await archiveStockLocation(user.id, organizationId, locationId);
+  revalidatePath("/");
+  return res;
+}
+
+export async function recordStockMovementAction(organizationId: string, data: StockMovementInput) {
+  const user = await getAuthenticatedUser();
+  const movement = await recordStockMovement(user.id, organizationId, data);
+  revalidatePath("/");
+  return movement;
+}
+
+// =============================================================================
 // METRICS LOADERS
 // =============================================================================
 
@@ -177,6 +226,10 @@ export async function getBusinessMetrics(organizationId: string) {
     vendors,
     products,
     recentAudits,
+    warehouses,
+    stockLocations,
+    stockBalances,
+    stockMovements,
   ] = await Promise.all([
     prisma.invoice.findMany({
       where: { organizationId: context.organizationId, type: "SALES", isArchived: false },
@@ -223,6 +276,34 @@ export async function getBusinessMetrics(organizationId: string) {
       where: { organizationId: context.organizationId },
       orderBy: { createdAt: "desc" },
       take: 6,
+    }),
+    prisma.warehouse.findMany({
+      where: { organizationId: context.organizationId, isArchived: false },
+      include: { locations: { where: { isArchived: false } } },
+      orderBy: { code: "asc" },
+    }),
+    prisma.stockLocation.findMany({
+      where: { organizationId: context.organizationId, isArchived: false },
+      include: { warehouse: true },
+      orderBy: { code: "asc" },
+    }),
+    prisma.stockBalance.findMany({
+      where: { organizationId: context.organizationId },
+      include: {
+        product: true,
+        location: { include: { warehouse: true } },
+      },
+    }),
+    prisma.stockMovement.findMany({
+      where: { organizationId: context.organizationId },
+      include: {
+        product: true,
+        fromLocation: { include: { warehouse: true } },
+        toLocation: { include: { warehouse: true } },
+        user: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 50,
     }),
   ]);
 
@@ -302,6 +383,19 @@ export async function getBusinessMetrics(organizationId: string) {
   const netCashFlow = cashInflow.minus(cashOutflow);
   const netProfit = totalTaxableRevenue.minus(totalTaxablePurchases).minus(totalDirectExpenses);
 
+  // INVENTORY METRICS & BALANCES (Phase 5.1)
+  let totalInventoryUnits = 0;
+  let totalInventoryValuation = new Decimal(0);
+  const productStockMap = new Map<string, number>();
+
+  for (const b of stockBalances) {
+    totalInventoryUnits += b.quantity;
+    const itemValuation = new Decimal(b.quantity).times(b.product.purchasePrice || b.product.sellingPrice || 0);
+    totalInventoryValuation = totalInventoryValuation.plus(itemValuation);
+    const existing = productStockMap.get(b.productId) || 0;
+    productStockMap.set(b.productId, existing + b.quantity);
+  }
+
   return {
     organization: {
       id: context.organizationId,
@@ -335,6 +429,10 @@ export async function getBusinessMetrics(organizationId: string) {
       customersCount: customers.length,
       vendorsCount: vendors.length,
       productsCount: products.length,
+      warehousesCount: warehouses.length,
+      stockLocationsCount: stockLocations.length,
+      totalInventoryUnits,
+      totalInventoryValuation: totalInventoryValuation.toNumber(),
       isDemoDataNotice: "All metrics and domain records are calculated from real database entities in this organization.",
     },
     lists: {
@@ -369,6 +467,8 @@ export async function getBusinessMetrics(organizationId: string) {
         hsnSacCode: p.hsnSacCode,
         gstRate: p.gstRate,
         isActive: p.isActive,
+        trackInventory: p.trackInventory,
+        currentStock: productStockMap.get(p.id) || 0,
       })),
       orders: orders.map((o) => ({
         id: o.id,
@@ -402,6 +502,54 @@ export async function getBusinessMetrics(organizationId: string) {
         referenceNumber: p.referenceNumber,
         partnerName: p.type === "INCOMING" ? p.customer?.name : p.vendor?.name,
         invoiceNumber: p.invoice?.invoiceNumber ?? null,
+      })),
+      warehouses: warehouses.map((w) => ({
+        id: w.id,
+        name: w.name,
+        code: w.code,
+        address: w.address,
+        contactPhone: w.contactPhone,
+        contactEmail: w.contactEmail,
+        locationsCount: w.locations.length,
+      })),
+      stockLocations: stockLocations.map((l) => ({
+        id: l.id,
+        name: l.name,
+        code: l.code,
+        description: l.description,
+        warehouseId: l.warehouseId,
+        warehouseName: l.warehouse.name,
+        warehouseCode: l.warehouse.code,
+      })),
+      stockBalances: stockBalances.map((b) => ({
+        id: b.id,
+        productId: b.productId,
+        productName: b.product.name,
+        productSku: b.product.sku,
+        productUnit: b.product.unit,
+        locationId: b.locationId,
+        locationName: b.location.name,
+        locationCode: b.location.code,
+        warehouseName: b.location.warehouse.name,
+        warehouseCode: b.location.warehouse.code,
+        quantity: b.quantity,
+        valuation: new Decimal(b.quantity).times(b.product.purchasePrice || b.product.sellingPrice || 0).toNumber(),
+      })),
+      stockMovements: stockMovements.map((m) => ({
+        id: m.id,
+        movementNumber: m.movementNumber,
+        type: m.type,
+        productId: m.productId,
+        productName: m.product.name,
+        productSku: m.product.sku,
+        productUnit: m.product.unit,
+        quantity: m.quantity,
+        fromLocation: m.fromLocation ? `${m.fromLocation.warehouse.code} / ${m.fromLocation.code}` : null,
+        toLocation: m.toLocation ? `${m.toLocation.warehouse.code} / ${m.toLocation.code}` : null,
+        referenceNumber: m.referenceNumber,
+        reason: m.reason,
+        userName: m.user?.name || "System",
+        createdAt: m.createdAt.toISOString(),
       })),
     },
     recentActivity: recentAudits.map((a) => ({

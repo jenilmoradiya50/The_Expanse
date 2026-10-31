@@ -42,9 +42,22 @@ export const AuditEntity = {
   PERSONAL_BUDGET: "PERSONAL_BUDGET",
   ATTACHMENT: "ATTACHMENT",
   DOCUMENT_SEQUENCE: "DOCUMENT_SEQUENCE",
+  WAREHOUSE: "WAREHOUSE",
+  STOCK_LOCATION: "STOCK_LOCATION",
+  STOCK_MOVEMENT: "STOCK_MOVEMENT",
+  STOCK_BALANCE: "STOCK_BALANCE",
 } as const;
 
 export type AuditEntityType = (typeof AuditEntity)[keyof typeof AuditEntity];
+
+export const StockMovementType = {
+  INCOMING: "INCOMING",
+  OUTGOING: "OUTGOING",
+  TRANSFER: "TRANSFER",
+  ADJUSTMENT: "ADJUSTMENT",
+} as const;
+
+export type StockMovementTypeEnum = (typeof StockMovementType)[keyof typeof StockMovementType];
 
 export const InvoiceStatus = {
   DRAFT: "DRAFT",

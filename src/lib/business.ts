@@ -18,7 +18,8 @@ export type SequenceDocumentType =
   | "SALES_INVOICE"
   | "PURCHASE_INVOICE"
   | "INCOMING_PAYMENT"
-  | "OUTGOING_PAYMENT";
+  | "OUTGOING_PAYMENT"
+  | "STOCK_MOVEMENT";
 
 /**
  * Generates the next sequential document number atomically within a database transaction.
@@ -79,6 +80,16 @@ export async function getNextDocumentNumber(
       });
       for (const r of records) {
         const parts = r.paymentNumber.split("-");
+        const val = parseInt(parts[parts.length - 1], 10);
+        if (!isNaN(val) && val > maxNum) maxNum = val;
+      }
+    } else if (type === "STOCK_MOVEMENT") {
+      const records = await txOrPrisma.stockMovement.findMany({
+        where: { organizationId, movementNumber: { contains: `-${year}-` } },
+        select: { movementNumber: true },
+      });
+      for (const r of records) {
+        const parts = r.movementNumber.split("-");
         const val = parseInt(parts[parts.length - 1], 10);
         if (!isNaN(val) && val > maxNum) maxNum = val;
       }
@@ -471,6 +482,7 @@ export interface ProductInput {
   purchasePrice?: number;
   hsnSacCode: string;
   gstRate: number;
+  trackInventory?: boolean;
 }
 
 export async function getProducts(
@@ -525,6 +537,7 @@ export async function createProduct(userId: string, organizationId: string, data
       purchasePrice: new Decimal(data.purchasePrice || 0).toDecimalPlaces(2).toNumber(),
       hsnSacCode: data.hsnSacCode.trim(),
       gstRate: data.gstRate,
+      trackInventory: data.trackInventory !== undefined ? data.trackInventory : (data.type === "SERVICE" ? false : true),
     },
   });
 
