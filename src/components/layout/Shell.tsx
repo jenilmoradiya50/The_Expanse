@@ -105,10 +105,24 @@ interface ShellProps {
         orderNumber: string;
         type: string;
         status: string;
+        fulfilmentStatus?: string;
+        invoicingStatus?: string;
         partnerName?: string | null;
         orderDate: string;
         grandTotal: number;
         itemsCount: number;
+        items?: Array<{
+          id: string;
+          productId?: string | null;
+          description: string;
+          quantity: number;
+          fulfilledQuantity: number;
+          receivedQuantity?: number;
+          remainingQuantity: number;
+          unit?: string;
+          unitPrice: number;
+          totalAmount: number;
+        }>;
       }>;
       invoices: Array<{
         id: string;
@@ -180,6 +194,19 @@ interface ShellProps {
         reason?: string | null;
         userName: string;
         createdAt: string;
+      }>;
+      orderFulfilments?: Array<{
+        id: string;
+        fulfilmentNumber: string;
+        type: string;
+        status: string;
+        orderId: string;
+        orderNumber: string;
+        orderType: string;
+        userName: string;
+        notes?: string | null;
+        createdAt: string;
+        itemsCount: number;
       }>;
     };
     recentActivity: Array<{

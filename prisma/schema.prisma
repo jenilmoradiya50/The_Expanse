@@ -38,6 +38,7 @@ model User {
 
   // Inventory & Stock
   stockMovements       StockMovement[]
+  orderFulfilments     OrderFulfilment[]
 
   // Audit Logs
   auditLogs            AuditLog[]
@@ -76,6 +77,8 @@ model Organization {
   stockLocations   StockLocation[]
   stockMovements   StockMovement[]
   stockBalances    StockBalance[]
+  orderFulfilments OrderFulfilment[]
+  orderFulfilmentItems OrderFulfilmentItem[]
 
   // Audit History & Attachments
   auditLogs        AuditLog[]
@@ -245,6 +248,7 @@ model Product {
   invoiceItems   InvoiceItem[]
   stockBalances  StockBalance[]
   stockMovements StockMovement[]
+  fulfilmentItems OrderFulfilmentItem[]
 
   @@unique([organizationId, sku])
   @@index([organizationId, isActive, isArchived])
@@ -260,6 +264,7 @@ model Order {
   orderDate            DateTime
   expectedDeliveryDate DateTime?
   status               String        @default("DRAFT") // DRAFT, SUBMITTED, APPROVED, PARTIALLY_FULFILLED, COMPLETED, CANCELLED
+  fulfilmentStatus     String        @default("UNFULFILLED") // UNFULFILLED, PARTIALLY_FULFILLED, FULFILLED (or UNRECEIVED, PARTIALLY_RECEIVED, RECEIVED)
   invoicingStatus      String        @default("UNINVOICED") // UNINVOICED, PARTIALLY_INVOICED, FULLY_INVOICED
   placeOfSupply        String        // 2-digit Indian State Code
   isInterState         Boolean       @default(false)
@@ -280,6 +285,7 @@ model Order {
   vendor               Vendor?       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   items                OrderItem[]
   invoices             Invoice[]
+  fulfilments          OrderFulfilment[]
 
   @@unique([organizationId, orderNumber])
   @@index([organizationId, type, status, isArchived])
@@ -294,6 +300,7 @@ model OrderItem {
   quantity          Float    @default(1)
   invoicedQuantity  Float    @default(0)
   fulfilledQuantity Float    @default(0)
+  receivedQuantity  Float    @default(0)
   unit              String   @default("NOS")
   unitPrice     Float
   discount      Float    @default(0)
@@ -309,6 +316,7 @@ model OrderItem {
 
   order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product       Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  fulfilmentItems OrderFulfilmentItem[]
 
   @@index([orderId])
 }
@@ -489,6 +497,7 @@ model StockLocation {
   balances          StockBalance[]
   outgoingMovements StockMovement[] @relation("SourceLocation")
   incomingMovements StockMovement[] @relation("DestinationLocation")
+  fulfilmentItems   OrderFulfilmentItem[]
 
   @@unique([warehouseId, code])
   @@index([organizationId, warehouseId, isArchived])
@@ -513,6 +522,7 @@ model StockMovement {
   fromLocation    StockLocation? @relation("SourceLocation", fields: [fromLocationId], references: [id], onDelete: SetNull)
   toLocation      StockLocation? @relation("DestinationLocation", fields: [toLocationId], references: [id], onDelete: SetNull)
   user            User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  fulfilmentItems OrderFulfilmentItem[]
 
   @@index([organizationId, productId])
   @@index([organizationId, type])
@@ -534,6 +544,60 @@ model StockBalance {
   @@unique([organizationId, productId, locationId])
   @@index([organizationId, productId])
   @@index([locationId])
+}
+
+// -----------------------------------------------------------------------------
+// 4.2. Order Fulfilment & Goods Receiving (Phase 5.2)
+// -----------------------------------------------------------------------------
+
+model OrderFulfilment {
+  id               String                @id @default(cuid())
+  organizationId   String
+  orderId          String
+  fulfilmentNumber String                // e.g. "FUL-2026-0001" or "REC-2026-0001"
+  type             String                @default("SALES_FULFILMENT") // SALES_FULFILMENT, PURCHASE_RECEIPT
+  status           String                @default("COMPLETED") // COMPLETED, CANCELLED
+  idempotencyKey   String?
+  notes            String?
+  userId           String
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order            Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items            OrderFulfilmentItem[]
+
+  @@unique([organizationId, fulfilmentNumber])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, orderId])
+  @@index([organizationId, type])
+  @@index([createdAt])
+}
+
+model OrderFulfilmentItem {
+  id              String          @id @default(cuid())
+  organizationId  String
+  fulfilmentId    String
+  orderItemId     String
+  productId       String?
+  locationId      String?         // source location for sales fulfilment, destination location for purchase receipt
+  quantity        Float           // strictly positive quantity fulfilled or received in this event
+  stockMovementId String?         // linked stock movement (null for non-inventory products like services)
+  createdAt       DateTime        @default(now())
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  fulfilment      OrderFulfilment @relation(fields: [fulfilmentId], references: [id], onDelete: Cascade)
+  orderItem       OrderItem       @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  product         Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  location        StockLocation?  @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  stockMovement   StockMovement?  @relation(fields: [stockMovementId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([fulfilmentId])
+  @@index([orderItemId])
+  @@index([productId])
+  @@index([stockMovementId])
 }
 
 // -----------------------------------------------------------------------------

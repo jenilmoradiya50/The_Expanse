@@ -31,9 +31,15 @@ import {
   createStockLocation,
   archiveStockLocation,
   recordStockMovement,
+  fulfilSalesOrder,
+  receivePurchaseOrder,
+  getOrderFulfilments,
+  getOrderFulfilmentDetails,
   type WarehouseInput,
   type StockLocationInput,
   type StockMovementInput,
+  type SalesFulfilmentInput,
+  type PurchaseReceiptInput,
 } from "./inventory";
 import { AuditAction, AuditEntity } from "@/types";
 import Decimal from "decimal.js";
@@ -204,6 +210,34 @@ export async function recordStockMovementAction(organizationId: string, data: St
 }
 
 // =============================================================================
+// PHASE 5.2 SERVER ACTIONS FOR ORDER FULFILMENT & GOODS RECEIVING
+// =============================================================================
+
+export async function fulfilSalesOrderAction(organizationId: string, data: SalesFulfilmentInput) {
+  const user = await getAuthenticatedUser();
+  const result = await fulfilSalesOrder(user.id, organizationId, data);
+  revalidatePath("/");
+  return result;
+}
+
+export async function receivePurchaseOrderAction(organizationId: string, data: PurchaseReceiptInput) {
+  const user = await getAuthenticatedUser();
+  const result = await receivePurchaseOrder(user.id, organizationId, data);
+  revalidatePath("/");
+  return result;
+}
+
+export async function getOrderFulfilmentDetailsAction(organizationId: string, orderId: string) {
+  const user = await getAuthenticatedUser();
+  return await getOrderFulfilmentDetails(user.id, organizationId, orderId);
+}
+
+export async function getOrderFulfilmentsAction(organizationId: string, orderId: string) {
+  const user = await getAuthenticatedUser();
+  return await getOrderFulfilments(user.id, organizationId, orderId);
+}
+
+// =============================================================================
 // METRICS LOADERS
 // =============================================================================
 
@@ -230,6 +264,7 @@ export async function getBusinessMetrics(organizationId: string) {
     stockLocations,
     stockBalances,
     stockMovements,
+    orderFulfilments,
   ] = await Promise.all([
     prisma.invoice.findMany({
       where: { organizationId: context.organizationId, type: "SALES", isArchived: false },
@@ -301,6 +336,21 @@ export async function getBusinessMetrics(organizationId: string) {
         fromLocation: { include: { warehouse: true } },
         toLocation: { include: { warehouse: true } },
         user: true,
+      },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
+    prisma.orderFulfilment.findMany({
+      where: { organizationId: context.organizationId },
+      include: {
+        items: {
+          include: {
+            product: { select: { name: true, sku: true, unit: true } },
+            location: { select: { name: true, code: true } },
+          },
+        },
+        order: { select: { orderNumber: true, type: true } },
+        user: { select: { name: true } },
       },
       orderBy: { createdAt: "desc" },
       take: 50,
@@ -475,10 +525,27 @@ export async function getBusinessMetrics(organizationId: string) {
         orderNumber: o.orderNumber,
         type: o.type,
         status: o.status,
+        fulfilmentStatus: o.fulfilmentStatus,
+        invoicingStatus: o.invoicingStatus,
         partnerName: o.type === "SALES" ? o.customer?.name : o.vendor?.name,
         orderDate: o.orderDate.toISOString(),
         grandTotal: o.grandTotal,
         itemsCount: o.items.length,
+        items: o.items.map((oi) => ({
+          id: oi.id,
+          productId: oi.productId,
+          description: oi.description,
+          quantity: oi.quantity,
+          fulfilledQuantity: oi.fulfilledQuantity,
+          receivedQuantity: oi.receivedQuantity || oi.fulfilledQuantity,
+          remainingQuantity: Math.max(
+            0,
+            oi.quantity - (o.type === "SALES" ? oi.fulfilledQuantity : (oi.receivedQuantity || oi.fulfilledQuantity))
+          ),
+          unit: oi.unit,
+          unitPrice: oi.unitPrice,
+          totalAmount: oi.totalAmount,
+        })),
       })),
       invoices: salesInvoices.concat(purchaseInvoices).map((inv) => ({
         id: inv.id,
@@ -550,6 +617,19 @@ export async function getBusinessMetrics(organizationId: string) {
         reason: m.reason,
         userName: m.user?.name || "System",
         createdAt: m.createdAt.toISOString(),
+      })),
+      orderFulfilments: orderFulfilments.map((f) => ({
+        id: f.id,
+        fulfilmentNumber: f.fulfilmentNumber,
+        type: f.type,
+        status: f.status,
+        orderId: f.orderId,
+        orderNumber: f.order.orderNumber,
+        orderType: f.order.type,
+        userName: f.user?.name || "System",
+        notes: f.notes,
+        createdAt: f.createdAt.toISOString(),
+        itemsCount: f.items.length,
       })),
     },
     recentActivity: recentAudits.map((a) => ({

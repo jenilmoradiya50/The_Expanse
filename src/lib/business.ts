@@ -19,7 +19,9 @@ export type SequenceDocumentType =
   | "PURCHASE_INVOICE"
   | "INCOMING_PAYMENT"
   | "OUTGOING_PAYMENT"
-  | "STOCK_MOVEMENT";
+  | "STOCK_MOVEMENT"
+  | "SALES_FULFILMENT"
+  | "PURCHASE_RECEIPT";
 
 /**
  * Generates the next sequential document number atomically within a database transaction.
@@ -90,6 +92,16 @@ export async function getNextDocumentNumber(
       });
       for (const r of records) {
         const parts = r.movementNumber.split("-");
+        const val = parseInt(parts[parts.length - 1], 10);
+        if (!isNaN(val) && val > maxNum) maxNum = val;
+      }
+    } else if (type === "SALES_FULFILMENT" || type === "PURCHASE_RECEIPT") {
+      const records = await txOrPrisma.orderFulfilment.findMany({
+        where: { organizationId, fulfilmentNumber: { contains: `-${year}-` } },
+        select: { fulfilmentNumber: true },
+      });
+      for (const r of records) {
+        const parts = r.fulfilmentNumber.split("-");
         const val = parseInt(parts[parts.length - 1], 10);
         if (!isNaN(val) && val > maxNum) maxNum = val;
       }

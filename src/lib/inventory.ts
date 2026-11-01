@@ -38,6 +38,27 @@ export interface StockMovementInput {
   targetQuantity?: number; // optional physical count for ADJUSTMENT
 }
 
+export interface FulfilmentItemInput {
+  orderItemId: string;
+  locationId?: string | null;
+  quantity: number; // strictly positive
+}
+
+export interface SalesFulfilmentInput {
+  orderId: string;
+  items: FulfilmentItemInput[];
+  notes?: string | null;
+  idempotencyKey?: string | null;
+}
+
+export interface PurchaseReceiptInput {
+  orderId: string;
+  items: FulfilmentItemInput[];
+  allowOverReceipt?: boolean;
+  notes?: string | null;
+  idempotencyKey?: string | null;
+}
+
 // =============================================================================
 // 1. WAREHOUSE MANAGEMENT SERVICES
 // =============================================================================
@@ -342,12 +363,16 @@ export async function archiveStockLocation(
 export async function recordStockMovement(
   userId: string,
   organizationId: string,
-  input: StockMovementInput
+  input: StockMovementInput,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  txOverride?: any
 ) {
   const context = await verifyTenantAccess(userId, organizationId, Role.ACCOUNTANT);
 
+  const client = txOverride || prisma;
+
   // 1. Verify Product ownership & inventory tracking capability
-  const product = await prisma.product.findFirst({
+  const product = await client.product.findFirst({
     where: { id: input.productId, organizationId, isArchived: false },
   });
 
@@ -367,8 +392,9 @@ export async function recordStockMovement(
     throw new Error(`INVALID_TYPE: Unknown movement type '${type}'.`);
   }
 
-  // Execute entire inventory update inside an atomic transaction
-  return await prisma.$transaction(async (tx) => {
+  // Execute inventory update inside atomic transaction or provided transactional context
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const executeOperation = async (tx: any) => {
     let moveQty: Decimal;
     let fromLocId: string | null = null;
     let toLocId: string | null = null;
@@ -727,7 +753,9 @@ export async function recordStockMovement(
     );
 
     return movement;
-  });
+  };
+
+  return txOverride ? await executeOperation(txOverride) : await prisma.$transaction(executeOperation);
 }
 
 // =============================================================================
@@ -910,4 +938,673 @@ export async function getProductStockOverview(
       locations: stockInfo.locations,
     };
   });
+}
+
+// =============================================================================
+// 5. ORDER FULFILMENT & GOODS RECEIVING SERVICES (Phase 5.2)
+// =============================================================================
+
+/**
+ * Executes a partial or complete Sales Order fulfilment.
+ *
+ * Invariants Enforced:
+ * 1. Multi-tenant isolation: order, products, locations, and user must belong to active org.
+ * 2. Over-fulfilment protection: fulfilledQuantity + toFulfil cannot exceed ordered quantity.
+ * 3. Inventory decrement: physical tracked products require a valid source location with sufficient stock.
+ * 4. Services / non-inventory products do not decrement stock or create stock movements.
+ * 5. Atomic transaction: order line item updates, stock movements, stock balance decrements,
+ *    and audit logs succeed or fail together.
+ * 6. Fulfilment status updates independently of invoice status and payment status.
+ * 7. Idempotency protection prevents duplicate submissions.
+ */
+export async function fulfilSalesOrder(
+  userId: string,
+  organizationId: string,
+  input: SalesFulfilmentInput
+) {
+  const context = await verifyTenantAccess(userId, organizationId, Role.ACCOUNTANT);
+
+  if (!input.items || input.items.length === 0) {
+    throw new Error("INVALID_INPUT: Fulfilment must contain at least one line item.");
+  }
+
+  // Idempotency check: if an existing fulfilment matches the idempotencyKey in this org, return it immediately
+  if (input.idempotencyKey && input.idempotencyKey.trim() !== "") {
+    const existing = await prisma.orderFulfilment.findFirst({
+      where: {
+        organizationId,
+        idempotencyKey: input.idempotencyKey.trim(),
+      },
+      include: {
+        items: {
+          include: {
+            product: { select: { id: true, name: true, sku: true, unit: true } },
+            location: { select: { id: true, name: true, code: true } },
+            stockMovement: { select: { id: true, movementNumber: true } },
+          },
+        },
+        order: { select: { id: true, orderNumber: true, status: true, fulfilmentStatus: true } },
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    if (existing) {
+      const existingOrder = await prisma.order.findUnique({
+        where: { id: existing.orderId },
+        include: { items: { include: { product: true } } },
+      });
+      return { fulfilment: existing, order: existingOrder, alreadyProcessed: true };
+    }
+  }
+
+  return await prisma.$transaction(async (tx) => {
+    // 1. Lock and verify Sales Order ownership & state
+    const order = await tx.order.findFirst({
+      where: { id: input.orderId, organizationId, isArchived: false },
+      include: { items: { include: { product: true } } },
+    });
+
+    if (!order) {
+      throw new Error("NOT_FOUND: Linked sales order not found in the active organization.");
+    }
+
+    if (order.type !== "SALES") {
+      throw new Error("INVALID_ORDER_TYPE: Cannot fulfil a non-sales order via sales fulfilment.");
+    }
+
+    if (order.status === "CANCELLED") {
+      throw new Error("ORDER_CANCELLED: Cannot fulfil a cancelled sales order.");
+    }
+
+    const fulfilmentItemsData: Array<{
+      organizationId: string;
+      orderItemId: string;
+      productId: string | null;
+      locationId: string | null;
+      quantity: number;
+      stockMovementId: string | null;
+    }> = [];
+
+    // 2. Validate line items and execute stock movements
+    for (const itemInput of input.items) {
+      if (itemInput.quantity === undefined || itemInput.quantity <= 0) {
+        throw new Error("INVALID_QUANTITY: Fulfilment quantity must be greater than zero.");
+      }
+
+      const orderItem = order.items.find((oi) => oi.id === itemInput.orderItemId);
+      if (!orderItem) {
+        throw new Error(
+          `NOT_FOUND: Order line item '${itemInput.orderItemId}' does not belong to order '${order.orderNumber}'.`
+        );
+      }
+
+      const alreadyFulfilled = new Decimal(orderItem.fulfilledQuantity || 0);
+      const toFulfil = new Decimal(itemInput.quantity);
+      const totalOrderQty = new Decimal(orderItem.quantity);
+
+      if (alreadyFulfilled.plus(toFulfil).greaterThan(totalOrderQty)) {
+        const remaining = totalOrderQty.minus(alreadyFulfilled);
+        throw new Error(
+          `OVER_FULFILMENT: Cannot fulfil ${toFulfil} units for '${orderItem.description}'. Only ${remaining} units remain unfulfilled.`
+        );
+      }
+
+      const product = orderItem.product;
+      const isTracked = product && product.trackInventory && product.type !== "SERVICE";
+      let stockMovementId: string | null = null;
+
+      if (isTracked) {
+        if (!itemInput.locationId) {
+          throw new Error(
+            `LOCATION_REQUIRED: Storage location is required to fulfil inventory item '${orderItem.description}'.`
+          );
+        }
+
+        const location = await tx.stockLocation.findFirst({
+          where: { id: itemInput.locationId, organizationId, isArchived: false },
+          include: { warehouse: true },
+        });
+
+        if (!location) {
+          throw new Error("NOT_FOUND: Active source stock location not found in this organization.");
+        }
+
+        // Check available stock at source location
+        const balance = await tx.stockBalance.findUnique({
+          where: {
+            organizationId_productId_locationId: {
+              organizationId,
+              productId: product.id,
+              locationId: location.id,
+            },
+          },
+        });
+
+        const availableStock = new Decimal(balance?.quantity || 0);
+        if (availableStock.lessThan(toFulfil)) {
+          throw new Error(
+            `INSUFFICIENT_STOCK: Available stock (${availableStock}) at '${location.name} (${location.code})' is less than requested fulfilment quantity (${toFulfil}).`
+          );
+        }
+
+        // Atomically record stock movement and decrement location balance using transaction context
+        const movement = await recordStockMovement(
+          userId,
+          organizationId,
+          {
+            productId: product.id,
+            type: StockMovementType.OUTGOING,
+            fromLocationId: location.id,
+            quantity: toFulfil.toNumber(),
+            referenceNumber: order.orderNumber,
+            reason: `Sales Order Fulfilment: ${order.orderNumber}`,
+          },
+          tx
+        );
+        stockMovementId = movement.id;
+      }
+
+      // Increment fulfilledQuantity on order item
+      const newFulfilledQty = alreadyFulfilled.plus(toFulfil).toNumber();
+      await tx.orderItem.update({
+        where: { id: orderItem.id },
+        data: { fulfilledQuantity: newFulfilledQty },
+      });
+      orderItem.fulfilledQuantity = newFulfilledQty;
+
+      fulfilmentItemsData.push({
+        organizationId,
+        orderItemId: orderItem.id,
+        productId: product?.id || null,
+        locationId: itemInput.locationId || null,
+        quantity: toFulfil.toNumber(),
+        stockMovementId,
+      });
+    }
+
+    // 3. Compute order-level fulfilment status without affecting invoicingStatus
+    const allFulfilled = order.items.every((oi) => oi.fulfilledQuantity >= oi.quantity);
+    const someFulfilled = order.items.some((oi) => oi.fulfilledQuantity > 0);
+    const newFulfilmentStatus = allFulfilled
+      ? "FULFILLED"
+      : someFulfilled
+      ? "PARTIALLY_FULFILLED"
+      : "UNFULFILLED";
+
+    const newOrderStatus = allFulfilled
+      ? "FULFILLED"
+      : someFulfilled
+      ? "PARTIALLY_FULFILLED"
+      : order.status;
+
+    const updatedOrder = await tx.order.update({
+      where: { id: order.id },
+      data: {
+        fulfilmentStatus: newFulfilmentStatus,
+        status: newOrderStatus,
+      },
+      include: { items: { include: { product: true } } },
+    });
+
+    // 4. Generate sequential fulfilment number: FUL-YYYY-XXXX
+    const fulfilmentNumber = await getNextDocumentNumber(
+      tx,
+      organizationId,
+      "SALES_FULFILMENT",
+      "FUL"
+    );
+
+    // 5. Create immutable OrderFulfilment record
+    const fulfilment = await tx.orderFulfilment.create({
+      data: {
+        organizationId,
+        orderId: order.id,
+        fulfilmentNumber,
+        type: "SALES_FULFILMENT",
+        status: "COMPLETED",
+        idempotencyKey: input.idempotencyKey?.trim() || null,
+        notes: input.notes?.trim() || null,
+        userId: context.userId,
+        items: {
+          create: fulfilmentItemsData,
+        },
+      },
+      include: {
+        items: {
+          include: {
+            product: { select: { id: true, name: true, sku: true, unit: true } },
+            location: { select: { id: true, name: true, code: true } },
+            stockMovement: { select: { id: true, movementNumber: true } },
+          },
+        },
+        order: { select: { id: true, orderNumber: true, status: true, fulfilmentStatus: true } },
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    // 6. Record Audit Log
+    await recordAuditLog(
+      {
+        organizationId,
+        userId: context.userId,
+        action: AuditAction.CREATE,
+        entity: AuditEntity.ORDER_FULFILMENT,
+        entityId: fulfilment.id,
+        newValues: {
+          fulfilmentNumber: fulfilment.fulfilmentNumber,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          itemsCount: input.items.length,
+          fulfilmentStatus: newFulfilmentStatus,
+        },
+      },
+      tx
+    );
+
+    return { fulfilment, order: updatedOrder, alreadyProcessed: false };
+  });
+}
+
+/**
+ * Executes a partial or complete Purchase Order receipt (goods inward).
+ *
+ * Invariants Enforced:
+ * 1. Multi-tenant isolation: order, products, locations, and user must belong to active org.
+ * 2. Over-receipt protection: prevents receiving more than ordered unless allowOverReceipt is true.
+ * 3. Inventory increment: physical tracked products require a valid destination location;
+ *    atomically increments stock balance via INCOMING movement.
+ * 4. Services / non-inventory products do not increment stock or create stock movements.
+ * 5. Atomic transaction: order line item updates, stock movements, stock balance increments,
+ *    and audit logs succeed or fail together.
+ * 6. Fulfilment status updates independently of invoice status and payment status.
+ * 7. Idempotency protection prevents duplicate submissions.
+ */
+export async function receivePurchaseOrder(
+  userId: string,
+  organizationId: string,
+  input: PurchaseReceiptInput
+) {
+  const context = await verifyTenantAccess(userId, organizationId, Role.ACCOUNTANT);
+
+  if (!input.items || input.items.length === 0) {
+    throw new Error("INVALID_INPUT: Goods receipt must contain at least one line item.");
+  }
+
+  // Idempotency check
+  if (input.idempotencyKey && input.idempotencyKey.trim() !== "") {
+    const existing = await prisma.orderFulfilment.findFirst({
+      where: {
+        organizationId,
+        idempotencyKey: input.idempotencyKey.trim(),
+      },
+      include: {
+        items: {
+          include: {
+            product: { select: { id: true, name: true, sku: true, unit: true } },
+            location: { select: { id: true, name: true, code: true } },
+            stockMovement: { select: { id: true, movementNumber: true } },
+          },
+        },
+        order: { select: { id: true, orderNumber: true, status: true, fulfilmentStatus: true } },
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    if (existing) {
+      const existingOrder = await prisma.order.findUnique({
+        where: { id: existing.orderId },
+        include: { items: { include: { product: true } } },
+      });
+      return { fulfilment: existing, order: existingOrder, alreadyProcessed: true };
+    }
+  }
+
+  return await prisma.$transaction(async (tx) => {
+    // 1. Lock and verify Purchase Order ownership & state
+    const order = await tx.order.findFirst({
+      where: { id: input.orderId, organizationId, isArchived: false },
+      include: { items: { include: { product: true } } },
+    });
+
+    if (!order) {
+      throw new Error("NOT_FOUND: Linked purchase order not found in the active organization.");
+    }
+
+    if (order.type !== "PURCHASE") {
+      throw new Error("INVALID_ORDER_TYPE: Cannot receive goods for a non-purchase order.");
+    }
+
+    if (order.status === "CANCELLED") {
+      throw new Error("ORDER_CANCELLED: Cannot receive goods for a cancelled purchase order.");
+    }
+
+    const fulfilmentItemsData: Array<{
+      organizationId: string;
+      orderItemId: string;
+      productId: string | null;
+      locationId: string | null;
+      quantity: number;
+      stockMovementId: string | null;
+    }> = [];
+
+    // 2. Validate line items and execute stock receipts
+    for (const itemInput of input.items) {
+      if (itemInput.quantity === undefined || itemInput.quantity <= 0) {
+        throw new Error("INVALID_QUANTITY: Received quantity must be greater than zero.");
+      }
+
+      const orderItem = order.items.find((oi) => oi.id === itemInput.orderItemId);
+      if (!orderItem) {
+        throw new Error(
+          `NOT_FOUND: Order line item '${itemInput.orderItemId}' does not belong to order '${order.orderNumber}'.`
+        );
+      }
+
+      const alreadyReceived = new Decimal(orderItem.receivedQuantity || orderItem.fulfilledQuantity || 0);
+      const toReceive = new Decimal(itemInput.quantity);
+      const totalOrderQty = new Decimal(orderItem.quantity);
+
+      if (!input.allowOverReceipt && alreadyReceived.plus(toReceive).greaterThan(totalOrderQty)) {
+        const remaining = totalOrderQty.minus(alreadyReceived);
+        throw new Error(
+          `OVER_RECEIPT: Cannot receive ${toReceive} units for '${orderItem.description}'. Only ${remaining} units remain pending receipt.`
+        );
+      }
+
+      const product = orderItem.product;
+      const isTracked = product && product.trackInventory && product.type !== "SERVICE";
+      let stockMovementId: string | null = null;
+
+      if (isTracked) {
+        if (!itemInput.locationId) {
+          throw new Error(
+            `LOCATION_REQUIRED: Destination storage location is required to receive inventory item '${orderItem.description}'.`
+          );
+        }
+
+        const location = await tx.stockLocation.findFirst({
+          where: { id: itemInput.locationId, organizationId, isArchived: false },
+          include: { warehouse: true },
+        });
+
+        if (!location) {
+          throw new Error("NOT_FOUND: Active destination stock location not found in this organization.");
+        }
+
+        // Atomically record INCOMING stock movement and increment location balance using transaction context
+        const movement = await recordStockMovement(
+          userId,
+          organizationId,
+          {
+            productId: product.id,
+            type: StockMovementType.INCOMING,
+            toLocationId: location.id,
+            quantity: toReceive.toNumber(),
+            referenceNumber: order.orderNumber,
+            reason: `Purchase Order Receipt: ${order.orderNumber}`,
+          },
+          tx
+        );
+        stockMovementId = movement.id;
+      }
+
+      // Increment receivedQuantity (and fulfilledQuantity for symmetry) on order item
+      const newReceivedQty = alreadyReceived.plus(toReceive).toNumber();
+      await tx.orderItem.update({
+        where: { id: orderItem.id },
+        data: {
+          receivedQuantity: newReceivedQty,
+          fulfilledQuantity: newReceivedQty,
+        },
+      });
+      orderItem.receivedQuantity = newReceivedQty;
+      orderItem.fulfilledQuantity = newReceivedQty;
+
+      fulfilmentItemsData.push({
+        organizationId,
+        orderItemId: orderItem.id,
+        productId: product?.id || null,
+        locationId: itemInput.locationId || null,
+        quantity: toReceive.toNumber(),
+        stockMovementId,
+      });
+    }
+
+    // 3. Compute order-level receipt status
+    const allReceived = order.items.every(
+      (oi) => (oi.receivedQuantity ?? oi.fulfilledQuantity) >= oi.quantity
+    );
+    const someReceived = order.items.some(
+      (oi) => (oi.receivedQuantity ?? oi.fulfilledQuantity) > 0
+    );
+    const newFulfilmentStatus = allReceived
+      ? "RECEIVED"
+      : someReceived
+      ? "PARTIALLY_RECEIVED"
+      : "UNRECEIVED";
+
+    const newOrderStatus = allReceived
+      ? "RECEIVED"
+      : someReceived
+      ? "PARTIALLY_RECEIVED"
+      : order.status;
+
+    const updatedOrder = await tx.order.update({
+      where: { id: order.id },
+      data: {
+        fulfilmentStatus: newFulfilmentStatus,
+        status: newOrderStatus,
+      },
+      include: { items: { include: { product: true } } },
+    });
+
+    // 4. Generate sequential receipt number: REC-YYYY-XXXX
+    const fulfilmentNumber = await getNextDocumentNumber(
+      tx,
+      organizationId,
+      "PURCHASE_RECEIPT",
+      "REC"
+    );
+
+    // 5. Create immutable OrderFulfilment record
+    const fulfilment = await tx.orderFulfilment.create({
+      data: {
+        organizationId,
+        orderId: order.id,
+        fulfilmentNumber,
+        type: "PURCHASE_RECEIPT",
+        status: "COMPLETED",
+        idempotencyKey: input.idempotencyKey?.trim() || null,
+        notes: input.notes?.trim() || null,
+        userId: context.userId,
+        items: {
+          create: fulfilmentItemsData,
+        },
+      },
+      include: {
+        items: {
+          include: {
+            product: { select: { id: true, name: true, sku: true, unit: true } },
+            location: { select: { id: true, name: true, code: true } },
+            stockMovement: { select: { id: true, movementNumber: true } },
+          },
+        },
+        order: { select: { id: true, orderNumber: true, status: true, fulfilmentStatus: true } },
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    // 6. Record Audit Log
+    await recordAuditLog(
+      {
+        organizationId,
+        userId: context.userId,
+        action: AuditAction.CREATE,
+        entity: AuditEntity.ORDER_FULFILMENT,
+        entityId: fulfilment.id,
+        newValues: {
+          fulfilmentNumber: fulfilment.fulfilmentNumber,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          itemsCount: input.items.length,
+          fulfilmentStatus: newFulfilmentStatus,
+        },
+      },
+      tx
+    );
+
+    return { fulfilment, order: updatedOrder, alreadyProcessed: false };
+  });
+}
+
+/**
+ * Retrieves all fulfilment/receipt events for a given order in chronological order.
+ */
+export async function getOrderFulfilments(
+  userId: string,
+  organizationId: string,
+  orderId: string
+) {
+  await verifyTenantAccess(userId, organizationId, Role.VIEWER);
+
+  return await prisma.orderFulfilment.findMany({
+    where: {
+      organizationId,
+      orderId,
+    },
+    include: {
+      items: {
+        include: {
+          product: { select: { id: true, name: true, sku: true, unit: true } },
+          location: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              warehouse: { select: { id: true, name: true, code: true } },
+            },
+          },
+          stockMovement: { select: { id: true, movementNumber: true, type: true } },
+        },
+      },
+      user: { select: { id: true, name: true, email: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+/**
+ * Retrieves detailed fulfilment status, line item balances, and available stock across locations.
+ */
+export async function getOrderFulfilmentDetails(
+  userId: string,
+  organizationId: string,
+  orderId: string
+) {
+  await verifyTenantAccess(userId, organizationId, Role.VIEWER);
+
+  const order = await prisma.order.findFirst({
+    where: { id: orderId, organizationId, isArchived: false },
+    include: {
+      customer: { select: { id: true, name: true } },
+      vendor: { select: { id: true, name: true } },
+      items: {
+        include: {
+          product: true,
+        },
+      },
+    },
+  });
+
+  if (!order) {
+    throw new Error("NOT_FOUND: Order not found in this organization.");
+  }
+
+  // Get active locations with their warehouses
+  const locations = await prisma.stockLocation.findMany({
+    where: { organizationId, isArchived: false },
+    include: { warehouse: { select: { id: true, name: true, code: true } } },
+    orderBy: [{ warehouse: { code: "asc" } }, { code: "asc" }],
+  });
+
+  // Collect product IDs that track inventory
+  const trackedProductIds = order.items
+    .map((oi) => oi.product)
+    .filter((p): p is NonNullable<typeof p> => Boolean(p && p.trackInventory && p.type !== "SERVICE"))
+    .map((p) => p.id);
+
+  // Fetch balances for these products across all locations
+  const balances = trackedProductIds.length > 0
+    ? await prisma.stockBalance.findMany({
+        where: {
+          organizationId,
+          productId: { in: trackedProductIds },
+        },
+      })
+    : [];
+
+  const balanceMap = new Map<string, number>();
+  for (const b of balances) {
+    balanceMap.set(`${b.productId}_${b.locationId}`, b.quantity);
+  }
+
+  const items = order.items.map((oi) => {
+    const isSales = order.type === "SALES";
+    const fulfilledOrReceived = isSales
+      ? oi.fulfilledQuantity
+      : (oi.receivedQuantity || oi.fulfilledQuantity);
+    const remaining = Math.max(0, oi.quantity - fulfilledOrReceived);
+    const isTracked = Boolean(oi.product && oi.product.trackInventory && oi.product.type !== "SERVICE");
+
+    const availableStockByLocation = isTracked && oi.productId
+      ? locations.map((loc) => ({
+          locationId: loc.id,
+          locationName: loc.name,
+          locationCode: loc.code,
+          warehouseName: loc.warehouse.name,
+          warehouseCode: loc.warehouse.code,
+          availableStock: balanceMap.get(`${oi.productId}_${loc.id}`) || 0,
+        }))
+      : [];
+
+    return {
+      orderItemId: oi.id,
+      productId: oi.productId,
+      description: oi.description,
+      productName: oi.product?.name || oi.description,
+      sku: oi.product?.sku || null,
+      unit: oi.unit,
+      orderedQuantity: oi.quantity,
+      fulfilledQuantity: oi.fulfilledQuantity,
+      receivedQuantity: oi.receivedQuantity || oi.fulfilledQuantity,
+      remainingQuantity: remaining,
+      invoicedQuantity: oi.invoicedQuantity,
+      isTrackedInventory: isTracked,
+      availableStockByLocation,
+    };
+  });
+
+  const fulfilments = await getOrderFulfilments(userId, organizationId, orderId);
+
+  return {
+    order: {
+      id: order.id,
+      orderNumber: order.orderNumber,
+      type: order.type,
+      status: order.status,
+      fulfilmentStatus: order.fulfilmentStatus,
+      invoicingStatus: order.invoicingStatus,
+      orderDate: order.orderDate,
+      partnerName: order.customer?.name || order.vendor?.name || "Direct",
+    },
+    items,
+    fulfilments,
+    locations: locations.map((loc) => ({
+      id: loc.id,
+      name: loc.name,
+      code: loc.code,
+      warehouseName: loc.warehouse.name,
+      warehouseCode: loc.warehouse.code,
+    })),
+  };
 }

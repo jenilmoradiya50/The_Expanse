@@ -39,7 +39,80 @@ import {
   createStockLocationAction,
   archiveStockLocationAction,
   recordStockMovementAction,
+  createOrderAction,
+  fulfilSalesOrderAction,
+  receivePurchaseOrderAction,
+  getOrderFulfilmentDetailsAction,
+  getOrderFulfilmentsAction,
 } from "@/lib/actions";
+
+interface FulfilmentDetailItem {
+  orderItemId: string;
+  productId: string | null;
+  description: string;
+  productName: string;
+  sku: string | null;
+  unit: string | null;
+  orderedQuantity: number;
+  fulfilledQuantity: number;
+  receivedQuantity: number;
+  remainingQuantity: number;
+  invoicedQuantity: number;
+  isTrackedInventory: boolean;
+  availableStockByLocation: Array<{
+    locationId: string;
+    locationName: string;
+    locationCode: string;
+    warehouseName: string;
+    warehouseCode: string;
+    availableStock: number;
+  }>;
+}
+
+interface FulfilmentHistoryItem {
+  id: string;
+  fulfilmentNumber: string;
+  type: string;
+  status: string;
+  notes?: string | null;
+  createdAt: string | Date;
+  user?: { id?: string; name?: string | null; email?: string | null } | null;
+  items: Array<{
+    id: string;
+    quantity: number;
+    orderItem?: { description?: string | null } | null;
+    location?: {
+      name: string;
+      code: string;
+      warehouse?: { name: string; code: string } | null;
+    } | null;
+    stockMovement?: { id: string; movementNumber: string; type: string } | null;
+  }>;
+}
+
+interface FulfilmentDetailsData {
+  order: {
+    id: string;
+    orderNumber: string;
+    type: string;
+    status: string;
+    fulfilmentStatus: string;
+    invoicingStatus: string;
+    orderDate: string | Date;
+    partnerName: string;
+    customer?: { id: string; name: string } | null;
+    vendor?: { id: string; name: string } | null;
+  };
+  items: FulfilmentDetailItem[];
+  fulfilments: FulfilmentHistoryItem[];
+  locations: Array<{
+    id: string;
+    name: string;
+    code: string;
+    warehouseName: string;
+    warehouseCode: string;
+  }>;
+}
 
 interface BusinessDashboardProps {
   data: {
@@ -167,9 +240,36 @@ interface BusinessDashboardProps {
         orderNumber: string;
         type: string;
         status: string;
+        fulfilmentStatus?: string;
+        invoicingStatus?: string;
         partnerName?: string | null;
         orderDate: string;
         grandTotal: number;
+        itemsCount: number;
+        items?: Array<{
+          id: string;
+          productId?: string | null;
+          description: string;
+          quantity: number;
+          fulfilledQuantity: number;
+          receivedQuantity?: number;
+          remainingQuantity: number;
+          unit?: string;
+          unitPrice: number;
+          totalAmount: number;
+        }>;
+      }>;
+      orderFulfilments?: Array<{
+        id: string;
+        fulfilmentNumber: string;
+        type: string;
+        status: string;
+        orderId: string;
+        orderNumber: string;
+        orderType: string;
+        userName: string;
+        notes?: string | null;
+        createdAt: string;
         itemsCount: number;
       }>;
       invoices: Array<{
@@ -316,6 +416,31 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
       )?.quantity ?? 0
     );
   };
+
+  // Phase 5.2 Sub-Tabs & Fulfilment States
+  const [salesSubTab, setSalesSubTab] = useState<"invoices" | "orders">("orders");
+  const [expensesSubTab, setExpensesSubTab] = useState<"bills" | "orders">("orders");
+
+  const [fulfilmentDetails, setFulfilmentDetails] = useState<FulfilmentDetailsData | null>(null);
+  const [fulfilmentHistory, setFulfilmentHistory] = useState<FulfilmentHistoryItem[] | null>(null);
+  const [fulfilmentItemsForm, setFulfilmentItemsForm] = useState<
+    Array<{ orderItemId: string; locationId: string; quantity: number }>
+  >([]);
+  const [fulfilmentNotes, setFulfilmentNotes] = useState("");
+  const [allowOverReceipt, setAllowOverReceipt] = useState(false);
+
+  const [orderForm, setOrderForm] = useState({
+    type: "SALES" as "SALES" | "PURCHASE",
+    customerId: lists.customers[0]?.id || "",
+    vendorId: lists.vendors[0]?.id || "",
+    description: "Enterprise Server Hardware",
+    hsnSacCode: "84715000",
+    quantity: 10,
+    unitPrice: 15000,
+    gstRate: 18,
+    placeOfSupply: "24",
+    notes: "",
+  });
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat("en-IN", {
@@ -503,6 +628,141 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
         });
       } catch (err: unknown) {
         setFormError(err instanceof Error ? err.message : "Failed to record stock movement");
+      }
+    });
+  };
+
+  const handleOpenFulfilmentModal = (orderId: string) => {
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        const details = (await getOrderFulfilmentDetailsAction(organization.id, orderId)) as unknown as FulfilmentDetailsData;
+        setFulfilmentDetails(details);
+        // Pre-fill fulfilment form with remaining quantities
+        const initialItems = details.items.map((it) => {
+          const firstLocWithStock = it.availableStockByLocation?.find((l) => l.availableStock > 0)?.locationId;
+          const defaultLoc = firstLocWithStock || details.locations[0]?.id || "";
+          return {
+            orderItemId: it.orderItemId,
+            locationId: defaultLoc,
+            quantity: it.remainingQuantity,
+          };
+        });
+        setFulfilmentItemsForm(initialItems);
+        setFulfilmentNotes("");
+        setModalType("fulfil_sales_order");
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to load order fulfilment details");
+      }
+    });
+  };
+
+  const handleOpenReceivingModal = (orderId: string) => {
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        const details = (await getOrderFulfilmentDetailsAction(organization.id, orderId)) as unknown as FulfilmentDetailsData;
+        setFulfilmentDetails(details);
+        const initialItems = details.items.map((it) => ({
+          orderItemId: it.orderItemId,
+          locationId: details.locations[0]?.id || "",
+          quantity: it.remainingQuantity,
+        }));
+        setFulfilmentItemsForm(initialItems);
+        setFulfilmentNotes("");
+        setAllowOverReceipt(false);
+        setModalType("receive_purchase_order");
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to load order receiving details");
+      }
+    });
+  };
+
+  const handleOpenFulfilmentHistory = (orderId: string) => {
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        const history = (await getOrderFulfilmentsAction(organization.id, orderId)) as unknown as FulfilmentHistoryItem[];
+        setFulfilmentHistory(history);
+        setModalType("fulfilment_history");
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to load fulfilment history");
+      }
+    });
+  };
+
+  const handleSubmitSalesFulfilment = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fulfilmentDetails) return;
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        const itemsToSubmit = fulfilmentItemsForm.filter((it) => it.quantity > 0);
+        if (itemsToSubmit.length === 0) {
+          throw new Error("Please specify a quantity greater than zero for at least one item.");
+        }
+        await fulfilSalesOrderAction(organization.id, {
+          orderId: fulfilmentDetails.order.id,
+          items: itemsToSubmit,
+          notes: fulfilmentNotes || undefined,
+        });
+        setModalType(null);
+        setFulfilmentDetails(null);
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to fulfil sales order");
+      }
+    });
+  };
+
+  const handleSubmitPurchaseReceipt = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fulfilmentDetails) return;
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        const itemsToSubmit = fulfilmentItemsForm.filter((it) => it.quantity > 0);
+        if (itemsToSubmit.length === 0) {
+          throw new Error("Please specify a quantity greater than zero for at least one item.");
+        }
+        await receivePurchaseOrderAction(organization.id, {
+          orderId: fulfilmentDetails.order.id,
+          items: itemsToSubmit,
+          allowOverReceipt,
+          notes: fulfilmentNotes || undefined,
+        });
+        setModalType(null);
+        setFulfilmentDetails(null);
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to receive purchase order");
+      }
+    });
+  };
+
+  const handleCreateOrder = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError(null);
+    startTransition(async () => {
+      try {
+        await createOrderAction(organization.id, {
+          type: orderForm.type,
+          customerId: orderForm.type === "SALES" ? orderForm.customerId : null,
+          vendorId: orderForm.type === "PURCHASE" ? orderForm.vendorId : null,
+          orderDate: new Date(),
+          placeOfSupply: orderForm.placeOfSupply,
+          notes: orderForm.notes || undefined,
+          items: [
+            {
+              description: orderForm.description,
+              hsnSacCode: orderForm.hsnSacCode,
+              quantity: Number(orderForm.quantity),
+              unitPrice: Number(orderForm.unitPrice),
+              gstRate: Number(orderForm.gstRate),
+            },
+          ],
+        });
+        setModalType(null);
+      } catch (err: unknown) {
+        setFormError(err instanceof Error ? err.message : "Failed to create order");
       }
     });
   };
@@ -755,14 +1015,76 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
               </div>
             )}
 
-            {(activeSection === "invoices" || activeSection === "expenses") && (
-              <button
-                onClick={() => setModalType("invoice")}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Create Invoice / Bill
-              </button>
+            {activeSection === "invoices" && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setOrderForm({
+                      type: "SALES",
+                      customerId: lists.customers[0]?.id || "",
+                      vendorId: "",
+                      description: "Enterprise Server Hardware",
+                      hsnSacCode: "84715000",
+                      quantity: 5,
+                      unitPrice: 20000,
+                      gstRate: 18,
+                      placeOfSupply: "24",
+                      notes: "",
+                    });
+                    setModalType("order");
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-zinc-700"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  New Sales Order
+                </button>
+                <button
+                  onClick={() => {
+                    setInvoiceForm({ ...invoiceForm, type: "SALES" });
+                    setModalType("invoice");
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Create Invoice
+                </button>
+              </div>
+            )}
+
+            {activeSection === "expenses" && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setOrderForm({
+                      type: "PURCHASE",
+                      customerId: "",
+                      vendorId: lists.vendors[0]?.id || "",
+                      description: "Component Sub-Assemblies",
+                      hsnSacCode: "84715000",
+                      quantity: 10,
+                      unitPrice: 8000,
+                      gstRate: 18,
+                      placeOfSupply: "24",
+                      notes: "",
+                    });
+                    setModalType("order");
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-zinc-700"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  New Purchase Order
+                </button>
+                <button
+                  onClick={() => {
+                    setInvoiceForm({ ...invoiceForm, type: "PURCHASE" });
+                    setModalType("invoice");
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Create Bill
+                </button>
+              </div>
             )}
 
             {activeSection === "payments" && (
@@ -1391,59 +1713,250 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
           </div>
         )}
 
-        {/* 5. INVOICES & PURCHASES */}
+        {/* 5. INVOICES, ORDERS & FULFILMENT */}
         {(activeSection === "invoices" || activeSection === "expenses") && (
           <div className="space-y-4">
-            {lists.invoices.length === 0 ? (
-              <p className="text-xs text-zinc-500 text-center py-8">No invoices recorded.</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-zinc-950 text-zinc-400 uppercase tracking-wider text-[10px] border-b border-zinc-800">
-                    <tr>
-                      <th className="py-2.5 px-3">Invoice #</th>
-                      <th className="py-2.5 px-3">Type</th>
-                      <th className="py-2.5 px-3">Entity</th>
-                      <th className="py-2.5 px-3">Date</th>
-                      <th className="py-2.5 px-3">Status</th>
-                      <th className="py-2.5 px-3">Grand Total</th>
-                      <th className="py-2.5 px-3">Balance Due</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-800/60">
-                    {lists.invoices.map((inv) => (
-                      <tr key={inv.id} className="hover:bg-zinc-800/30">
-                        <td className="py-3 px-3 font-mono font-medium text-white">{inv.invoiceNumber}</td>
-                        <td className="py-3 px-3">
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] ${
-                              inv.type === "SALES" ? "bg-emerald-500/10 text-emerald-400" : "bg-purple-500/10 text-purple-400"
-                            }`}
-                          >
-                            {inv.type}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-zinc-300">{inv.partnerName || "Direct"}</td>
-                        <td className="py-3 px-3 text-zinc-400">{new Date(inv.invoiceDate).toLocaleDateString("en-IN")}</td>
-                        <td className="py-3 px-3">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
-                              inv.status === "PAID"
-                                ? "bg-emerald-500/20 text-emerald-300"
-                                : inv.status === "PARTIALLY_PAID"
-                                ? "bg-amber-500/20 text-amber-300"
-                                : "bg-zinc-800 text-zinc-300"
-                            }`}
-                          >
-                            {inv.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 font-semibold text-white">{formatCurrency(inv.grandTotal)}</td>
-                        <td className="py-3 px-3 font-bold text-amber-400">{formatCurrency(inv.balanceDue)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            {/* Sub-Tabs for Orders vs Invoices */}
+            <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 text-xs">
+              {activeSection === "invoices" ? (
+                <>
+                  <button
+                    onClick={() => setSalesSubTab("orders")}
+                    className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-2 transition-colors ${
+                      salesSubTab === "orders"
+                        ? "bg-zinc-800 text-white"
+                        : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                    }`}
+                  >
+                    <Package className="w-3.5 h-3.5 text-indigo-400" />
+                    Sales Orders & Fulfilment ({lists.orders.filter((o) => o.type === "SALES").length})
+                  </button>
+                  <button
+                    onClick={() => setSalesSubTab("invoices")}
+                    className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-2 transition-colors ${
+                      salesSubTab === "invoices"
+                        ? "bg-zinc-800 text-white"
+                        : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                    Sales Invoices ({lists.invoices.filter((i) => i.type === "SALES").length})
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setExpensesSubTab("orders")}
+                    className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-2 transition-colors ${
+                      expensesSubTab === "orders"
+                        ? "bg-zinc-800 text-white"
+                        : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                    }`}
+                  >
+                    <Package className="w-3.5 h-3.5 text-sky-400" />
+                    Purchase Orders & Goods Inward ({lists.orders.filter((o) => o.type === "PURCHASE").length})
+                  </button>
+                  <button
+                    onClick={() => setExpensesSubTab("bills")}
+                    className={`px-3 py-1.5 rounded-lg font-medium flex items-center gap-2 transition-colors ${
+                      expensesSubTab === "bills"
+                        ? "bg-zinc-800 text-white"
+                        : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                    }`}
+                  >
+                    <CreditCard className="w-3.5 h-3.5 text-purple-400" />
+                    Purchase Bills & Expenses ({lists.invoices.filter((i) => i.type === "PURCHASE").length})
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* ORDERS TABLE VIEW */}
+            {((activeSection === "invoices" && salesSubTab === "orders") ||
+              (activeSection === "expenses" && expensesSubTab === "orders")) && (
+              <div className="space-y-4">
+                {lists.orders.filter((o) => o.type === (activeSection === "invoices" ? "SALES" : "PURCHASE")).length === 0 ? (
+                  <div className="text-center py-10 text-xs text-zinc-500 border border-dashed border-zinc-800 rounded-xl space-y-2">
+                    <Package className="w-8 h-8 text-zinc-600 mx-auto" />
+                    <p>
+                      No {activeSection === "invoices" ? "sales" : "purchase"} orders recorded yet.
+                    </p>
+                    <button
+                      onClick={() => {
+                        setOrderForm({
+                          type: activeSection === "invoices" ? "SALES" : "PURCHASE",
+                          customerId: lists.customers[0]?.id || "",
+                          vendorId: lists.vendors[0]?.id || "",
+                          description: activeSection === "invoices" ? "Enterprise Hardware Delivery" : "Components Inflow",
+                          hsnSacCode: "84715000",
+                          quantity: 5,
+                          unitPrice: 15000,
+                          gstRate: 18,
+                          placeOfSupply: "24",
+                          notes: "",
+                        });
+                        setModalType("order");
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"
+                    >
+                      Create First {activeSection === "invoices" ? "Sales" : "Purchase"} Order
+                    </button>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-zinc-950 text-zinc-400 uppercase tracking-wider text-[10px] border-b border-zinc-800">
+                        <tr>
+                          <th className="py-2.5 px-3">Order #</th>
+                          <th className="py-2.5 px-3">Party</th>
+                          <th className="py-2.5 px-3">Date</th>
+                          <th className="py-2.5 px-3">Fulfilment Status</th>
+                          <th className="py-2.5 px-3">Invoicing Status</th>
+                          <th className="py-2.5 px-3 text-right">Grand Total</th>
+                          <th className="py-2.5 px-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-800/60">
+                        {lists.orders
+                          .filter((o) => o.type === (activeSection === "invoices" ? "SALES" : "PURCHASE"))
+                          .map((o) => {
+                            const isSales = o.type === "SALES";
+                            const fStatus = o.fulfilmentStatus || (isSales ? "UNFULFILLED" : "UNRECEIVED");
+                            const isFullyDone = isSales ? fStatus === "FULFILLED" : fStatus === "RECEIVED";
+                            const isPartiallyDone = isSales ? fStatus === "PARTIALLY_FULFILLED" : fStatus === "PARTIALLY_RECEIVED";
+
+                            return (
+                              <tr key={o.id} className="hover:bg-zinc-800/30">
+                                <td className="py-3 px-3 font-mono font-medium text-white">
+                                  {o.orderNumber}
+                                  <span className="block text-[10px] text-zinc-500">{o.itemsCount} line items</span>
+                                </td>
+                                <td className="py-3 px-3 text-zinc-300 font-medium">{o.partnerName || "Direct"}</td>
+                                <td className="py-3 px-3 text-zinc-400">
+                                  {new Date(o.orderDate).toLocaleDateString("en-IN")}
+                                </td>
+                                <td className="py-3 px-3">
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                                      isFullyDone
+                                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                        : isPartiallyDone
+                                        ? "bg-amber-500/10 text-amber-300 border-amber-500/20"
+                                        : "bg-zinc-800 text-zinc-400 border-zinc-700"
+                                    }`}
+                                  >
+                                    {fStatus}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3">
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-[10px] font-medium border ${
+                                      o.invoicingStatus === "FULLY_INVOICED"
+                                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                        : o.invoicingStatus === "PARTIALLY_INVOICED"
+                                        ? "bg-amber-500/10 text-amber-300 border-amber-500/20"
+                                        : "bg-zinc-800 text-zinc-400 border-zinc-700"
+                                    }`}
+                                  >
+                                    {o.invoicingStatus || "UNINVOICED"}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3 text-right font-semibold text-white">
+                                  {formatCurrency(o.grandTotal)}
+                                </td>
+                                <td className="py-3 px-3 text-right space-x-1.5 whitespace-nowrap">
+                                  {isSales ? (
+                                    <button
+                                      disabled={isFullyDone}
+                                      onClick={() => handleOpenFulfilmentModal(o.id)}
+                                      className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+                                        isFullyDone
+                                          ? "bg-zinc-800 text-zinc-600 cursor-not-allowed"
+                                          : "bg-indigo-600 hover:bg-indigo-500 text-white"
+                                      }`}
+                                    >
+                                      Fulfil Stock
+                                    </button>
+                                  ) : (
+                                    <button
+                                      disabled={isFullyDone}
+                                      onClick={() => handleOpenReceivingModal(o.id)}
+                                      className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${
+                                        isFullyDone
+                                          ? "bg-zinc-800 text-zinc-600 cursor-not-allowed"
+                                          : "bg-sky-600 hover:bg-sky-500 text-white"
+                                      }`}
+                                    >
+                                      Receive Goods
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => handleOpenFulfilmentHistory(o.id)}
+                                    className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-medium transition-colors border border-zinc-700"
+                                  >
+                                    History
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* INVOICES / BILLS TABLE VIEW */}
+            {((activeSection === "invoices" && salesSubTab === "invoices") ||
+              (activeSection === "expenses" && expensesSubTab === "bills")) && (
+              <div className="space-y-4">
+                {lists.invoices.filter((inv) => inv.type === (activeSection === "invoices" ? "SALES" : "PURCHASE")).length === 0 ? (
+                  <p className="text-xs text-zinc-500 text-center py-8">
+                    No {activeSection === "invoices" ? "sales invoices" : "purchase bills"} recorded yet.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-zinc-950 text-zinc-400 uppercase tracking-wider text-[10px] border-b border-zinc-800">
+                        <tr>
+                          <th className="py-2.5 px-3">Invoice #</th>
+                          <th className="py-2.5 px-3">Entity</th>
+                          <th className="py-2.5 px-3">Date</th>
+                          <th className="py-2.5 px-3">Status</th>
+                          <th className="py-2.5 px-3 text-right">Grand Total</th>
+                          <th className="py-2.5 px-3 text-right">Balance Due</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-800/60">
+                        {lists.invoices
+                          .filter((inv) => inv.type === (activeSection === "invoices" ? "SALES" : "PURCHASE"))
+                          .map((inv) => (
+                            <tr key={inv.id} className="hover:bg-zinc-800/30">
+                              <td className="py-3 px-3 font-mono font-medium text-white">{inv.invoiceNumber}</td>
+                              <td className="py-3 px-3 text-zinc-300">{inv.partnerName || "Direct"}</td>
+                              <td className="py-3 px-3 text-zinc-400">{new Date(inv.invoiceDate).toLocaleDateString("en-IN")}</td>
+                              <td className="py-3 px-3">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                                    inv.status === "PAID"
+                                      ? "bg-emerald-500/20 text-emerald-300"
+                                      : inv.status === "PARTIALLY_PAID"
+                                      ? "bg-amber-500/20 text-amber-300"
+                                      : "bg-zinc-800 text-zinc-300"
+                                  }`}
+                                >
+                                  {inv.status}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-right font-semibold text-white">{formatCurrency(inv.grandTotal)}</td>
+                              <td className="py-3 px-3 text-right font-bold text-amber-400">{formatCurrency(inv.balanceDue)}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1566,7 +2079,15 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
          ========================================================================= */}
       {modalType && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-4">
+          <div
+            className={`w-full ${
+              modalType === "fulfil_sales_order" ||
+              modalType === "receive_purchase_order" ||
+              modalType === "fulfilment_history"
+                ? "max-w-3xl"
+                : "max-w-md"
+            } bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto`}
+          >
             <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
               <h3 className="text-sm font-bold text-white uppercase tracking-wider">
                 {modalType === "customer" && "Add New Customer"}
@@ -1577,9 +2098,18 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
                 {modalType === "warehouse" && "Add New Warehouse"}
                 {modalType === "stock_location" && "Add Stock Location"}
                 {modalType === "stock_movement" && "Record Stock Movement"}
+                {modalType === "order" &&
+                  (orderForm.type === "SALES" ? "Create Sales Order" : "Create Purchase Order")}
+                {modalType === "fulfil_sales_order" && "Fulfil Sales Order & Dispatch Stock"}
+                {modalType === "receive_purchase_order" && "Receive Purchase Order & Inward Stock"}
+                {modalType === "fulfilment_history" && "Fulfilment & Receipt History"}
               </h3>
               <button
-                onClick={() => setModalType(null)}
+                onClick={() => {
+                  setModalType(null);
+                  setFulfilmentDetails(null);
+                  setFulfilmentHistory(null);
+                }}
                 className="text-zinc-400 hover:text-white text-xs font-semibold"
               >
                 Cancel
@@ -2273,6 +2803,536 @@ export function BusinessDashboard({ data, activeSection }: BusinessDashboardProp
                   {isPending ? "Executing Transaction..." : "Record Movement & Update Balances"}
                 </button>
               </form>
+            )}
+
+            {/* ORDER FORM */}
+            {modalType === "order" && (
+              <form onSubmit={handleCreateOrder} className="space-y-3 text-xs">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Order Type</label>
+                    <select
+                      value={orderForm.type}
+                      onChange={(e) =>
+                        setOrderForm({
+                          ...orderForm,
+                          type: e.target.value as "SALES" | "PURCHASE",
+                        })
+                      }
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                    >
+                      <option value="SALES">Sales Order (Customer)</option>
+                      <option value="PURCHASE">Purchase Order (Supplier)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-zinc-400 block mb-1">
+                      {orderForm.type === "SALES" ? "Customer *" : "Supplier / Vendor *"}
+                    </label>
+                    {orderForm.type === "SALES" ? (
+                      <select
+                        required
+                        value={orderForm.customerId}
+                        onChange={(e) => setOrderForm({ ...orderForm, customerId: e.target.value })}
+                        className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                      >
+                        <option value="" disabled>Select Customer</option>
+                        {lists.customers.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} ({c.stateCode ? `State ${c.stateCode}` : "No State"})
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <select
+                        required
+                        value={orderForm.vendorId}
+                        onChange={(e) => setOrderForm({ ...orderForm, vendorId: e.target.value })}
+                        className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                      >
+                        <option value="" disabled>Select Vendor</option>
+                        {lists.vendors.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.name} ({v.stateCode ? `State ${v.stateCode}` : "No State"})
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-zinc-400 block mb-1">Item Description *</label>
+                  <input
+                    required
+                    value={orderForm.description}
+                    onChange={(e) => setOrderForm({ ...orderForm, description: e.target.value })}
+                    placeholder="e.g. Server Rack Equipment / Maintenance Service"
+                    className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-zinc-400 block mb-1">HSN/SAC Code</label>
+                    <input
+                      value={orderForm.hsnSacCode}
+                      onChange={(e) => setOrderForm({ ...orderForm, hsnSacCode: e.target.value })}
+                      placeholder="8471"
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Place of Supply (State)</label>
+                    <input
+                      value={orderForm.placeOfSupply}
+                      onChange={(e) => setOrderForm({ ...orderForm, placeOfSupply: e.target.value })}
+                      placeholder="24"
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Quantity *</label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="any"
+                      required
+                      value={orderForm.quantity}
+                      onChange={(e) => setOrderForm({ ...orderForm, quantity: Number(e.target.value) })}
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Unit Price (₹) *</label>
+                    <input
+                      type="number"
+                      step="any"
+                      required
+                      value={orderForm.unitPrice}
+                      onChange={(e) => setOrderForm({ ...orderForm, unitPrice: Number(e.target.value) })}
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-zinc-400 block mb-1">GST Rate (%)</label>
+                    <select
+                      value={orderForm.gstRate}
+                      onChange={(e) => setOrderForm({ ...orderForm, gstRate: Number(e.target.value) })}
+                      className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                    >
+                      <option value={0}>0%</option>
+                      <option value={5}>5%</option>
+                      <option value={12}>12%</option>
+                      <option value={18}>18%</option>
+                      <option value={28}>28%</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-zinc-400 block mb-1">Order Notes / References</label>
+                  <input
+                    value={orderForm.notes}
+                    onChange={(e) => setOrderForm({ ...orderForm, notes: e.target.value })}
+                    placeholder="e.g. PO reference / Project Alpha delivery"
+                    className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isPending}
+                  className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-semibold text-white transition-colors"
+                >
+                  {isPending ? "Creating..." : `Save ${orderForm.type === "SALES" ? "Sales" : "Purchase"} Order`}
+                </button>
+              </form>
+            )}
+
+            {/* SALES FULFILMENT MODAL */}
+            {modalType === "fulfil_sales_order" && (
+              <form onSubmit={handleSubmitSalesFulfilment} className="space-y-4 text-xs">
+                {!fulfilmentDetails ? (
+                  <div className="py-8 text-center text-zinc-500">Loading order items and warehouse stock...</div>
+                ) : (
+                  <>
+                    <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
+                      <div>
+                        <div className="font-mono text-zinc-200 font-semibold">{fulfilmentDetails.order.orderNumber}</div>
+                        <div className="text-zinc-400 text-[11px]">{fulfilmentDetails.order.customer?.name || "Customer"}</div>
+                      </div>
+                      <div className="text-right">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                          {fulfilmentDetails.order.fulfilmentStatus}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="font-semibold text-zinc-300">Items to Fulfil & Dispatch</div>
+                      {fulfilmentDetails.items.map((item) => {
+                        const formItem = fulfilmentItemsForm.find((fi) => fi.orderItemId === item.orderItemId);
+                        const selectedLocationId = formItem?.locationId || "";
+                        const selectedLocStock = item.availableStockByLocation?.find(
+                          (l) => l.locationId === selectedLocationId
+                        )?.availableStock ?? 0;
+                        const isFullyFulfilled = item.remainingQuantity <= 0;
+
+                        return (
+                          <div
+                            key={item.orderItemId}
+                            className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 space-y-2.5"
+                          >
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <span className="font-medium text-zinc-200">{item.description}</span>
+                                {item.isTrackedInventory ? (
+                                  <span className="ml-2 px-1.5 py-0.5 text-[9px] rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                    Tracked Stock
+                                  </span>
+                                ) : (
+                                  <span className="ml-2 px-1.5 py-0.5 text-[9px] rounded bg-zinc-800 text-zinc-400">
+                                    Service / Untracked
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-right font-mono text-[11px]">
+                                <span className="text-zinc-400">Ordered: {item.orderedQuantity}</span>
+                                <span className="text-emerald-400 ml-2">Fulfilled: {item.fulfilledQuantity}</span>
+                                <span className="text-amber-400 ml-2">Remaining: {item.remainingQuantity}</span>
+                              </div>
+                            </div>
+
+                            {isFullyFulfilled ? (
+                              <div className="text-[11px] text-emerald-400 font-mono py-1">✓ Completely Fulfilled</div>
+                            ) : (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1 border-t border-zinc-850">
+                                {item.isTrackedInventory ? (
+                                  <div>
+                                    <label className="text-zinc-400 block mb-1">Source Stock Location *</label>
+                                    <select
+                                      required
+                                      value={selectedLocationId}
+                                      onChange={(e) => {
+                                        const newLocId = e.target.value;
+                                        setFulfilmentItemsForm((prev) =>
+                                          prev.map((fi) =>
+                                            fi.orderItemId === item.orderItemId
+                                              ? { ...fi, locationId: newLocId }
+                                              : fi
+                                          )
+                                        );
+                                      }}
+                                      className="w-full p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100 font-mono text-[11px]"
+                                    >
+                                      <option value="" disabled>Select Location</option>
+                                      {item.availableStockByLocation?.map((loc) => (
+                                        <option key={loc.locationId} value={loc.locationId}>
+                                          {loc.warehouseName} → {loc.locationName} ({loc.locationCode}) [Avail: {loc.availableStock}]
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center text-zinc-400 text-[11px]">
+                                    Service/non-inventory: No warehouse decrement required.
+                                  </div>
+                                )}
+
+                                <div>
+                                  <label className="text-zinc-400 block mb-1">
+                                    Quantity to Fulfil
+                                    {item.isTrackedInventory && (
+                                      <span className="text-zinc-500 ml-1">
+                                        (Avail in Loc: {selectedLocStock})
+                                      </span>
+                                    )}
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max={item.remainingQuantity}
+                                    step="any"
+                                    value={formItem?.quantity ?? 0}
+                                    onChange={(e) => {
+                                      const val = Math.max(0, Number(e.target.value));
+                                      setFulfilmentItemsForm((prev) =>
+                                        prev.map((fi) =>
+                                          fi.orderItemId === item.orderItemId
+                                            ? { ...fi, quantity: val }
+                                            : fi
+                                        )
+                                      );
+                                    }}
+                                    className="w-full p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100 font-mono text-[11px]"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div>
+                      <label className="text-zinc-400 block mb-1">Fulfilment Dispatch Notes / Waybill</label>
+                      <input
+                        value={fulfilmentNotes}
+                        onChange={(e) => setFulfilmentNotes(e.target.value)}
+                        placeholder="e.g. Dispatched via Express Logistics AWB #998821"
+                        className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isPending || fulfilmentItemsForm.every((it) => it.quantity <= 0)}
+                      className="w-full py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 font-semibold text-white transition-colors disabled:opacity-50"
+                    >
+                      {isPending ? "Dispatching & Updating Ledger..." : "Confirm Fulfilment & Dispatch Stock"}
+                    </button>
+                  </>
+                )}
+              </form>
+            )}
+
+            {/* PURCHASE RECEIVING MODAL */}
+            {modalType === "receive_purchase_order" && (
+              <form onSubmit={handleSubmitPurchaseReceipt} className="space-y-4 text-xs">
+                {!fulfilmentDetails ? (
+                  <div className="py-8 text-center text-zinc-500">Loading order items and destination locations...</div>
+                ) : (
+                  <>
+                    <div className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
+                      <div>
+                        <div className="font-mono text-zinc-200 font-semibold">{fulfilmentDetails.order.orderNumber}</div>
+                        <div className="text-zinc-400 text-[11px]">{fulfilmentDetails.order.vendor?.name || "Supplier"}</div>
+                      </div>
+                      <div className="text-right">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          {fulfilmentDetails.order.fulfilmentStatus}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="font-semibold text-zinc-300">Items to Receive & Inward</div>
+                      {fulfilmentDetails.items.map((item) => {
+                        const formItem = fulfilmentItemsForm.find((fi) => fi.orderItemId === item.orderItemId);
+                        const selectedLocationId = formItem?.locationId || "";
+
+                        return (
+                          <div
+                            key={item.orderItemId}
+                            className="p-3 rounded-lg bg-zinc-950 border border-zinc-800 space-y-2.5"
+                          >
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <span className="font-medium text-zinc-200">{item.description}</span>
+                                {item.isTrackedInventory ? (
+                                  <span className="ml-2 px-1.5 py-0.5 text-[9px] rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                    Stock Inventory
+                                  </span>
+                                ) : (
+                                  <span className="ml-2 px-1.5 py-0.5 text-[9px] rounded bg-zinc-800 text-zinc-400">
+                                    Service / Expense
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-right font-mono text-[11px]">
+                                <span className="text-zinc-400">Ordered: {item.orderedQuantity}</span>
+                                <span className="text-emerald-400 ml-2">Received: {item.receivedQuantity}</span>
+                                <span className="text-amber-400 ml-2">Remaining: {item.remainingQuantity}</span>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1 border-t border-zinc-850">
+                              {item.isTrackedInventory ? (
+                                <div>
+                                  <label className="text-zinc-400 block mb-1">Destination Storage Location *</label>
+                                  <select
+                                    required
+                                    value={selectedLocationId}
+                                    onChange={(e) => {
+                                      const newLocId = e.target.value;
+                                      setFulfilmentItemsForm((prev) =>
+                                        prev.map((fi) =>
+                                          fi.orderItemId === item.orderItemId
+                                            ? { ...fi, locationId: newLocId }
+                                            : fi
+                                        )
+                                      );
+                                    }}
+                                    className="w-full p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100 font-mono text-[11px]"
+                                  >
+                                    <option value="" disabled>Select Location</option>
+                                    {fulfilmentDetails.locations?.map((loc) => (
+                                      <option key={loc.id} value={loc.id}>
+                                        {loc.warehouseName} → {loc.name} ({loc.code})
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              ) : (
+                                <div className="flex items-center text-zinc-400 text-[11px]">
+                                  Service item: Goods receipt marked without physical stock increment.
+                                </div>
+                              )}
+
+                              <div>
+                                <label className="text-zinc-400 block mb-1">Quantity to Receive</label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  value={formItem?.quantity ?? 0}
+                                  onChange={(e) => {
+                                    const val = Math.max(0, Number(e.target.value));
+                                    setFulfilmentItemsForm((prev) =>
+                                      prev.map((fi) =>
+                                        fi.orderItemId === item.orderItemId
+                                          ? { ...fi, quantity: val }
+                                          : fi
+                                      )
+                                    );
+                                  }}
+                                  className="w-full p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100 font-mono text-[11px]"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex items-center gap-2 p-2.5 rounded-lg bg-zinc-950 border border-zinc-800">
+                      <input
+                        type="checkbox"
+                        id="allowOverReceipt"
+                        checked={allowOverReceipt}
+                        onChange={(e) => setAllowOverReceipt(e.target.checked)}
+                        className="rounded bg-zinc-900 border-zinc-700 text-amber-500 focus:ring-0"
+                      />
+                      <label htmlFor="allowOverReceipt" className="text-zinc-300 cursor-pointer select-none">
+                        Authorize over-receipt (permit receiving more than original purchase order quantity)
+                      </label>
+                    </div>
+
+                    <div>
+                      <label className="text-zinc-400 block mb-1">Receipt / Inward Delivery Challan Notes</label>
+                      <input
+                        value={fulfilmentNotes}
+                        onChange={(e) => setFulfilmentNotes(e.target.value)}
+                        placeholder="e.g. Vendor DC #5521 received in good condition"
+                        className="w-full p-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isPending || fulfilmentItemsForm.every((it) => it.quantity <= 0)}
+                      className="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 font-semibold text-white transition-colors disabled:opacity-50"
+                    >
+                      {isPending ? "Inwarding Goods..." : "Confirm Goods Receipt & Inward Stock"}
+                    </button>
+                  </>
+                )}
+              </form>
+            )}
+
+            {/* FULFILMENT HISTORY MODAL */}
+            {modalType === "fulfilment_history" && (
+              <div className="space-y-4 text-xs">
+                {!fulfilmentHistory ? (
+                  <div className="py-8 text-center text-zinc-500">Loading fulfilment records...</div>
+                ) : fulfilmentHistory.length === 0 ? (
+                  <div className="py-8 text-center text-zinc-500 space-y-1">
+                    <History className="w-8 h-8 mx-auto text-zinc-600" />
+                    <div>No fulfilment or receipt records found for this order.</div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {fulfilmentHistory.map((rec) => (
+                      <div
+                        key={rec.id}
+                        className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2.5"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-semibold text-white">
+                              {rec.fulfilmentNumber}
+                            </span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-mono uppercase ${
+                                rec.type === "SALES_FULFILMENT"
+                                  ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"
+                                  : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                              }`}
+                            >
+                              {rec.type === "SALES_FULFILMENT" ? "Sales Dispatch" : "Purchase Receipt"}
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-zinc-400 font-mono">
+                            {new Date(rec.createdAt).toLocaleString("en-IN", {
+                              day: "2-digit",
+                              month: "short",
+                              year: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        </div>
+
+                        {rec.notes && (
+                          <div className="text-[11px] text-zinc-400 italic">
+                            Note: {rec.notes}
+                          </div>
+                        )}
+
+                        <div className="border-t border-zinc-850 pt-2 space-y-1.5">
+                          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
+                            Dispatched / Received Items
+                          </div>
+                          {rec.items.map((it) => (
+                            <div
+                              key={it.id}
+                              className="flex items-center justify-between text-[11px] p-1.5 rounded bg-zinc-900 border border-zinc-850"
+                            >
+                              <div>
+                                <span className="text-zinc-200 font-medium">
+                                  {it.orderItem?.description || "Item"}
+                                </span>
+                                {it.location && (
+                                  <span className="text-zinc-400 text-[10px] ml-2">
+                                    at {it.location.warehouse?.name} → {it.location.name} ({it.location.code})
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 font-mono">
+                                <span className="font-semibold text-white">Qty: {it.quantity}</span>
+                                {it.stockMovement && (
+                                  <span className="text-[10px] text-indigo-400 bg-indigo-500/10 px-1 py-0.5 rounded border border-indigo-500/20">
+                                    {it.stockMovement.movementNumber}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="text-[10px] text-zinc-500 flex justify-between pt-1">
+                          <span>Recorded by: {rec.user?.name || "System"}</span>
+                          <span className="uppercase">{rec.status}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>

@@ -46,9 +46,29 @@ export const AuditEntity = {
   STOCK_LOCATION: "STOCK_LOCATION",
   STOCK_MOVEMENT: "STOCK_MOVEMENT",
   STOCK_BALANCE: "STOCK_BALANCE",
+  ORDER_FULFILMENT: "ORDER_FULFILMENT",
+  ORDER_FULFILMENT_ITEM: "ORDER_FULFILMENT_ITEM",
 } as const;
 
 export type AuditEntityType = (typeof AuditEntity)[keyof typeof AuditEntity];
+
+export const FulfilmentType = {
+  SALES_FULFILMENT: "SALES_FULFILMENT",
+  PURCHASE_RECEIPT: "PURCHASE_RECEIPT",
+} as const;
+
+export type FulfilmentTypeEnum = (typeof FulfilmentType)[keyof typeof FulfilmentType];
+
+export const FulfilmentStatus = {
+  UNFULFILLED: "UNFULFILLED",
+  PARTIALLY_FULFILLED: "PARTIALLY_FULFILLED",
+  FULFILLED: "FULFILLED",
+  UNRECEIVED: "UNRECEIVED",
+  PARTIALLY_RECEIVED: "PARTIALLY_RECEIVED",
+  RECEIVED: "RECEIVED",
+} as const;
+
+export type FulfilmentStatusEnum = (typeof FulfilmentStatus)[keyof typeof FulfilmentStatus];
 
 export const StockMovementType = {
   INCOMING: "INCOMING",
@@ -82,6 +102,9 @@ export const OrderStatus = {
   SUBMITTED: "SUBMITTED",
   APPROVED: "APPROVED",
   PARTIALLY_FULFILLED: "PARTIALLY_FULFILLED",
+  FULFILLED: "FULFILLED",
+  PARTIALLY_RECEIVED: "PARTIALLY_RECEIVED",
+  RECEIVED: "RECEIVED",
   COMPLETED: "COMPLETED",
   CANCELLED: "CANCELLED",
 } as const;
